@@ -4,7 +4,10 @@ import base64
 import time
 import threading
 
+current_description = ""
+
 def process_frame(frame, timestamp):
+    global current_description
     start_time = time.time()
     
     # Encode to base64
@@ -28,6 +31,7 @@ def process_frame(frame, timestamp):
             result = response.json()
             description = result.get("response", "No response")
             processing_time = time.time() - start_time
+            current_description = description
             print(f"[{time.strftime('%H:%M:%S')}] Description: {description}")
             print(f"Processing rate: {processing_time:.2f} seconds")
             print("Press 'q' in camera window to exit")
@@ -107,6 +111,18 @@ def run_camera_mode():
         if not ret:
             print("Failed to read frame")
             break
+        
+        # Overlay description on frame
+        if current_description:
+            lines = current_description.split('.')
+            y = 30
+            for line in lines:
+                line = line.strip()
+                if line:
+                    cv2.putText(frame, line + '.', (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                    y += 25
+                    if y > frame.shape[0] - 10:  # Prevent going off screen
+                        break
         
         cv2.imshow('Camera Feed', frame)
         
