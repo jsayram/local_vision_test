@@ -82,7 +82,7 @@ def main():
     run_camera_mode()
 
 def run_camera_mode():
-    global show_overlay
+    global cap, processing, last_capture, interval, show_overlay
     # Check if Ollama is running and moondream is available
     try:
         response = requests.get("http://localhost:11434/api/tags", timeout=5)
@@ -135,23 +135,26 @@ def run_camera_mode():
     
     print("Vision Test Started!")
     print(f"Real-time capture at \033[92m{PROCESS_FPS} FPS\033[0m, processing in background.")
-    print("Press 'q' to quit")
+    print("Starting web server at http://localhost:8000")
+    print("Press Ctrl+C to stop")
     
-    processing = False
-    last_capture = 0
-    interval = 1.0 / PROCESS_FPS
-    last_status_print = 0
-    
+    # Start Flask app
+    app.run(host='0.0.0.0', port=8000, debug=False, threaded=True)
+
+def generate_frames():
+    global cap, processing, last_capture, interval, show_overlay
     while True:
+        if cap is None or not cap.isOpened():
+            break
+            
         ret, frame = cap.read()
         if not ret:
-            print("Failed to read frame")
             break
         
         # Keep a clean copy for AI processing (before overlays)
         clean_frame = frame.copy()
         
-        # Overlay description on frame
+        # Overlay description on frame for web display
         if show_overlay and current_description:
             frame_height = frame.shape[0]
             # Start from bottom
@@ -177,42 +180,128 @@ def run_camera_mode():
                 y += 30
             cv2.putText(frame, f"FPS: {PROCESS_FPS}", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
         
-        cv2.imshow('Camera Feed', frame)
+        # Encode frame for streaming
+        ret, buffer = cv2.imencode('.jpg', frame)
+        frame_bytes = buffer.tobytes()
         
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        
+        # Check if we should process this frame
         current_time = time.time()
-        if current_time - last_status_print > 1:
-            print("Camera running...")
-            last_status_print = current_time
-        
-        if current_time - last_capture > interval and not processing:  # Capture at configured FPS if not processing
-            print("Capturing frame...")
+        if current_time - last_capture > interval and not processing:
             processing = True
             last_capture = current_time
-            # Save a debug frame to verify what camera sees
-            cv2.imwrite('/tmp/debug_frame.jpg', clean_frame)
-            print("Debug frame saved to /tmp/debug_frame.jpg")
             # Start processing thread - use clean_frame without overlays
             frame_to_process = clean_frame.copy()
             def process_and_reset():
-                print("Processing started...")
                 process_frame(frame_to_process, current_time)
                 global processing
                 processing = False
-                print("Processing finished.")
             thread = threading.Thread(target=process_and_reset)
             thread.daemon = True
             thread.start()
         
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            break
-        elif key == ord('t'):
-            show_overlay = not show_overlay
-            print(f"Overlay {'enabled' if show_overlay else 'disabled'}")
-    
-    cap.release()
-    cv2.destroyAllWindows()
-    print("Camera turned off. Exited.")
+        time.sleep(0.1)  # Small delay to prevent overwhelming the stream
+
+@app.route('/')
+def index():
+    return render_template_string('''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Real-time Vision Analysis</title>
+        <style>
+            body { 
+                font-family: Arial, sans-serif; 
+                margin: 0; 
+                padding: 20px; 
+                background: #f0f0f0; 
+            }
+            .container { 
+                max-width: 800px; 
+                margin: 0 auto; 
+                background: white; 
+                padding: 20px; 
+                border-radius: 10px; 
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+            }
+            h1 { 
+                color: #333; 
+                text-align: center; 
+            }
+            .video-container { 
+                text-align: center; 
+                margin: 20px 0; 
+            }
+            img { 
+                max-width: 100%; 
+                border: 2px solid #333; 
+                border-radius: 5px; 
+            }
+            .controls { 
+                text-align: center; 
+                margin: 20px 0; 
+            }
+            button { 
+                background: #4CAF50; 
+                color: white; 
+                border: none; 
+                padding: 10px 20px; 
+                margin: 0 10px; 
+                border-radius: 5px; 
+                cursor: pointer; 
+                font-size: 16px; 
+            }
+            button:hover { 
+                background: #45a049; 
+            }
+            .status { 
+                text-align: center; 
+                margin: 20px 0; 
+                font-size: 18px; 
+                color: #666; 
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Real-time Vision Analysis</h1>
+            <div class="video-container">
+                <img src="/video_feed" alt="Camera Feed">
+            </div>
+            <div class="status">
+                <p>AI-powered object and scene recognition with live descriptions</p>
+                <p>Green text shows AI descriptions, black text shows performance stats</p>
+            </div>
+            <div class="controls">
+                <button onclick="toggleOverlay()">Toggle Overlay</button>
+                <button onclick="location.reload()">Refresh</button>
+            </div>
+        </div>
+        
+        <script>
+            function toggleOverlay() {
+                fetch('/toggle_overlay')
+                    .then(response => response.json())
+                    .then(data => {
+                        alert('Overlay ' + (data.overlay ? 'enabled' : 'disabled'));
+                    });
+            }
+        </script>
+    </body>
+    </html>
+    ''')
+
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/toggle_overlay')
+def toggle_overlay():
+    global show_overlay
+    show_overlay = not show_overlay
+    return {'overlay': show_overlay}
 
 def run_image_mode(image_path):
     # Check if Ollama is running and moondream is available
