@@ -53,6 +53,9 @@ detection_mode = "all_detection"  # Options: "all_detection", "face_features", "
 # Processing FPS control
 processing_fps = "1 FPS"  # Options: "1 FPS", "15 FPS", "1 FP 2 seconds", "1 FP 5 seconds", etc. or custom
 
+# Countdown tracking for UI
+last_detection_time_global = 0  # Track globally for API access
+
 class AdaptiveConfidenceScorer:
     """Adaptive confidence scoring system that learns from historical correlations"""
     def __init__(self):
@@ -418,6 +421,8 @@ def run_camera_mode():
 def generate_frames():
     global cap, processing, last_capture, interval, show_overlay, server_running, processing_fps, paused
     last_frame = None  # Store last frame for pause mode
+    cached_detections = []  # Cache detection results between intervals
+    last_detection_time = 0  # Track when we last ran detection
 
     try:
         while server_running:
@@ -450,21 +455,27 @@ def generate_frames():
             # Update interval based on current FPS setting
             interval = parse_fps_string(processing_fps)
 
+            # Check if it's time to run detection and AI processing
+            current_time = time.time()
+            should_process = (current_time - last_detection_time) >= interval
+
             # Keep a clean copy for AI processing (before overlays)
             clean_frame = frame.copy()
 
-            # Apply detection and overlays if show_overlay is True
-            if show_overlay:
+            # Only run detection at the specified interval rate
+            if should_process and show_overlay:
+                global last_detection_time_global
                 # Apply detection using DetectionManager
-                detections = detection_manager.detect_objects(frame, detection_model, detection_mode)
-                detected_objects = [f"{det['label']} ({det['confidence']:.2f})" for det in detections]
+                cached_detections = detection_manager.detect_objects(frame, detection_model, detection_mode)
+                last_detection_time = current_time
+                last_detection_time_global = current_time  # Update global for API
+            
+            # Use cached detections for display
+            detections = cached_detections if show_overlay else []
 
-                # Draw detections on frame
+            # Draw detections on frame (using cached results)
+            if show_overlay and detections:
                 detection_manager.draw_detections(frame, detections)
-            else:
-                # No overlay - just use clean frame, no detections displayed
-                detections = []
-                detected_objects = []
 
             frame_height, frame_width = frame.shape[:2]
 
@@ -512,9 +523,8 @@ def generate_frames():
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
-            # Check if we should process this frame (skip if paused)
-            current_time = time.time()
-            if current_time - last_capture > interval and not processing and not paused:
+            # Run AI processing at the same interval as detection (if we processed this frame)
+            if should_process and not processing and not paused:
                 processing = True
                 last_capture = current_time
                 # Start processing thread - use clean_frame without overlays
@@ -531,8 +541,9 @@ def generate_frames():
             if not server_running:  # Check before sleep
                 break
 
-                # Sleep for the selected interval (UI-controlled processing rate)
-                time.sleep(interval)
+            # Small sleep for smooth video streaming (~30fps display)
+            # Detection and AI processing are rate-limited by the interval check above
+            time.sleep(0.033)
 
     except GeneratorExit:
         # Normal generator cleanup when client disconnects - don't release camera
@@ -608,7 +619,7 @@ def change_detection_model():
 
 @app.route('/get_status')
 def get_status():
-    global detection_model, detection_mode, current_processing_time, current_frame_size, processing_fps, paused
+    global detection_model, detection_mode, current_processing_time, current_frame_size, processing_fps, paused, last_detection_time_global, interval
     
     # Get model capability description
     model_capabilities = {
@@ -617,6 +628,14 @@ def get_status():
         'opencv': 'Lightweight'
     }
     
+    # Calculate countdown
+    current_interval = parse_fps_string(processing_fps)
+    if last_detection_time_global > 0:
+        elapsed = time.time() - last_detection_time_global
+        remaining = max(0, current_interval - elapsed)
+    else:
+        remaining = 0
+    
     return {
         'model': detection_model.upper(),
         'capability': model_capabilities.get(detection_model, 'Unknown'),
@@ -624,7 +643,9 @@ def get_status():
         'processing_time': f"{current_processing_time:.2f}s",
         'frame_size': f"{current_frame_size[0]}x{current_frame_size[1]}",
         'fps': processing_fps,
-        'paused': paused
+        'paused': paused,
+        'countdown': round(remaining, 1),
+        'interval': current_interval
     }
 
 @app.route('/get_ai_description')

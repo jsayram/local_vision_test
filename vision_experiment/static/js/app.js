@@ -119,6 +119,21 @@ function updateStatus() {
             // Update current FPS display
             currentFpsDisplay.textContent = currentFps;
             
+            // Update countdown display
+            const countdownDisplay = document.getElementById('countdownDisplay');
+            if (data.countdown !== undefined && data.interval !== undefined) {
+                if (data.paused) {
+                    countdownDisplay.textContent = '⏸️ Paused';
+                    countdownDisplay.className = 'font-mono font-bold text-yellow-600 bg-yellow-100 px-2 py-0.5 rounded';
+                } else if (data.countdown <= 0) {
+                    countdownDisplay.textContent = '🔄 Processing...';
+                    countdownDisplay.className = 'font-mono font-bold text-green-600 bg-green-100 px-2 py-0.5 rounded';
+                } else {
+                    countdownDisplay.textContent = `⏱️ Next: ${data.countdown}s`;
+                    countdownDisplay.className = 'font-mono font-bold text-orange-600 bg-orange-100 px-2 py-0.5 rounded';
+                }
+            }
+            
             // Check if current FPS is in the dropdown options
             const options = Array.from(fpsSelect.options).map(opt => opt.value);
             if (options.includes(currentFps)) {
@@ -212,11 +227,15 @@ function updateAIDescription() {
         });
 }
 
-// Auto-refresh terminal and status every 2 seconds
+// Fast countdown updates (every 500ms for smooth countdown display)
+setInterval(() => {
+    updateStatus();
+}, 500);
+
+// Slower data updates (every 2 seconds for terminal/AI/stats)
 setInterval(() => {
     updateTerminalData();
     updateAIDescription();
-    updateStatus();
     updateExtendedStats();
 }, 2000);
 
