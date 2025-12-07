@@ -172,8 +172,8 @@ class MoondreamContext:
         # Add event context
         event_hints = {
             "NEW_PERSON": "A new person just appeared. Greet them warmly and ask their name.",
-            "CHAT_MESSAGE": "The user sent you a message. Respond naturally to continue the conversation.",
-            "VOICE_MESSAGE": "The user spoke to you. Respond naturally to what they said.",
+            "CHAT_MESSAGE": "The user sent you a text message. Respond naturally and conversationally.",
+            "VOICE_MESSAGE": "The user spoke to you. Give a natural, varied response - don't repeat yourself.",
             "PERIODIC_UPDATE": "Continue the conversation or ask an engaging question.",
             "POSE_CHANGED": "The person moved. Comment briefly if relevant, or continue the conversation."
         }
@@ -184,7 +184,8 @@ class MoondreamContext:
         # Add user's message if provided (chat or voice input)
         if self.user_message:
             parts.append(f"\nUser says: \"{self.user_message}\"")
-            parts.append("Respond directly to what they said. Be conversational and natural.")
+            parts.append("IMPORTANT: Respond DIRECTLY to what they said. Answer their question or comment on their topic.")
+            parts.append("DO NOT just say 'Hello from within the frame' - actually engage with their words!")
         
         # Add image description if provided
         if image_description:
@@ -195,6 +196,7 @@ class MoondreamContext:
             parts.append("\nIntroduce yourself as a living portrait and ask for their name.")
         
         parts.append("\nRespond in 1-2 short sentences. Be warm, engaging, and conversational.")
+        parts.append("VARY your responses - don't repeat the same phrases!")
         
         return "\n".join(parts)
 

@@ -90,10 +90,13 @@ body {
 .chat-messages {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 15px;
     display: flex;
     flex-direction: column;
     gap: 12px;
+    max-height: calc(100vh - 200px);
+    min-height: 300px;
 }
 
 .chat-message {

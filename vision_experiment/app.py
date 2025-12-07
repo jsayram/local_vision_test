@@ -45,6 +45,7 @@ from core.voice_manager import create_voice_manager
 from core.stream_manager import StreamManager
 from core.chat_manager import ChatManager, CommandParser
 from core.offline_speech_recognizer import create_offline_speech_recognizer
+from core.llm_client import create_llm_client
 
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -120,6 +121,29 @@ face_recognition_manager = FaceRecognitionManager()
 # Voice settings
 voice_settings = VoiceSettings()
 voice_manager = create_voice_manager(voice_settings, use_stub=False)  # Use real TTS
+
+# LLM for conversation (Llama 3.2 3B for desktop, 1B for Raspberry Pi)
+llm_client = create_llm_client(model_name="llama3.2:latest")  # Use the installed version
+print(f"[LLM] Client initialized: available={llm_client.available}")
+
+# Set up voice manager callbacks for speaking events
+def on_tts_start(text):
+    """Called when TTS starts speaking"""
+    socketio.emit('tts_speaking', {'speaking': True, 'text': text[:50]})
+    # Update animation state
+    with animation_state_lock:
+        animation_state.speaking = True
+
+def on_tts_end():
+    """Called when TTS stops speaking"""
+    socketio.emit('tts_speaking', {'speaking': False})
+    # Update animation state
+    with animation_state_lock:
+        animation_state.speaking = False
+
+if voice_manager:
+    voice_manager.on_speak_start = on_tts_start
+    voice_manager.on_speak_end = on_tts_end
 
 # Offline speech recognition
 offline_speech = None  # Initialize on demand
@@ -447,8 +471,37 @@ def moondream_worker():
             # Show typing indicator
             socketio.emit('typing_indicator', {'is_typing': True})
             
-            # Use the wrapper which handles stub fallback properly
+            # STEP 1: Use Moondream for VISION ONLY (what do I see?)
+            print(f"[Moondream Worker] Step 1: Getting vision description...")
             result = moondream_client.call_moondream(face_img, context, use_stub=True)
+            vision_description = result.text  # This is just image description
+            
+            # STEP 2: Use LLM for CONVERSATION (how do I respond?)
+            print(f"[Moondream Worker] Step 2: Generating conversational response...")
+            print(f"[Moondream Worker] Vision saw: {vision_description[:100]}...")
+            
+            conversation_response = llm_client.generate_response(
+                vision_description=vision_description,
+                user_message=context.user_message,
+                conversation_history=context.recent_interactions if hasattr(context, 'recent_interactions') else [],
+                person_name=context.name if hasattr(context, 'name') else None,
+                event_type=event_type.name
+            )
+            
+            # Send debug info
+            socketio.emit('debug_info', {
+                'event_type': event_type.name,
+                'person_id': person_id,
+                'user_message': context.user_message,
+                'vision_description': vision_description,
+                'llm_response': conversation_response,
+                'recent_interactions_count': len(context.recent_interactions) if hasattr(context, 'recent_interactions') else 0
+            })
+            
+            print(f"[Moondream Worker] Final response: {conversation_response[:100]}...")
+            
+            # Use the LLM response instead of Moondream's generic caption
+            result.text = conversation_response
             
             # Hide typing indicator
             socketio.emit('typing_indicator', {'is_typing': False})
@@ -758,6 +811,40 @@ def handle_start_speech(data=None):
             'status': 'Failed - Check Vosk model installation',
             'error': True
         })
+
+@socketio.on('get_debug_info')
+def handle_get_debug_info(data=None):
+    """Send comprehensive debug information to client"""
+    try:
+        global animation_state, offline_speech, voice_manager, stream_manager, chat_manager
+        
+        debug_info = {
+            'timestamp': datetime.now().isoformat(),
+            'animation_state': {
+                'mood': animation_state.mood,
+                'speaking': animation_state.speaking,
+                'subtitle': animation_state.subtitle,
+                'mouth_open': animation_state.mouth_open,
+                'last_line': animation_state.last_line[:100] if animation_state.last_line else None
+            },
+            'voice_status': {
+                'available': voice_manager.is_available() if voice_manager else False,
+                'is_speaking': voice_manager.is_speaking if voice_manager else False,
+                'queue_size': voice_manager.tts_queue.qsize() if voice_manager else 0
+            },
+            'speech_recognition': {
+                'active': offline_speech.is_listening if offline_speech else False,
+                'available': offline_speech is not None
+            },
+            'stream_manager': {
+                'active': stream_manager.is_active() if hasattr(stream_manager, 'is_active') else False
+            }
+        }
+        
+        socketio.emit('debug_info', debug_info)
+        
+    except Exception as e:
+        print(f"[Debug] Error getting debug info: {e}")
 
 @socketio.on('stop_speech_recognition')
 def handle_stop_speech(data=None):

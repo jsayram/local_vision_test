@@ -82,6 +82,18 @@ class SocketManager extends EventTarget {
             this.emit('tts_started', data);
         });
         
+        this.socket.on('tts_speaking', (data) => {
+            console.log('[Socket] TTS speaking state:', data.speaking);
+            this.emit('tts_speaking', data);
+            // Trigger mouth animation on canvas
+            const portraitCanvas = document.getElementById('portrait-canvas');
+            if (data.speaking && portraitCanvas) {
+                portraitCanvas.classList.add('speaking');
+            } else if (portraitCanvas) {
+                portraitCanvas.classList.remove('speaking');
+            }
+        });
+        
         this.socket.on('tts_error', (data) => {
             this.emit('tts_error', data);
         });

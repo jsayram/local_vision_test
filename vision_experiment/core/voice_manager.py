@@ -44,6 +44,10 @@ class VoiceManager:
         self.is_speaking = False
         self.current_speaker = None  # Thread-safe flag
         
+        # Event callbacks
+        self.on_speak_start = None
+        self.on_speak_end = None
+        
         self._initialize_tts()
     
     def is_available(self) -> bool:
@@ -183,6 +187,10 @@ class VoiceManager:
                     self.is_speaking = True
                     print(f"[Voice] Speaking: {text[:50]}...")
                     
+                    # Notify frontend that speaking started
+                    if hasattr(self, 'on_speak_start'):
+                        self.on_speak_start(text)
+                    
                     try:
                         self.tts_engine.say(text)
                         self.tts_engine.runAndWait()
@@ -190,6 +198,10 @@ class VoiceManager:
                         print(f"[Voice] TTS error: {e}")
                     
                     self.is_speaking = False
+                    
+                    # Notify frontend that speaking stopped
+                    if hasattr(self, 'on_speak_end'):
+                        self.on_speak_end()
                 
             except queue.Empty:
                 continue
