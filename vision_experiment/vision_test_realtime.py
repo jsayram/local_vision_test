@@ -21,6 +21,21 @@ last_capture = 0
 interval = 1.0 / PROCESS_FPS
 show_overlay = True
 
+# Detection mode control
+detection_mode = "face_features"  # Options: "face_features", "objects", "both", "none"
+
+# Server control
+server_running = True
+
+# Load detection classifiers
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+profile_face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml')
+fullbody_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fullbody.xml')
+upperbody_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_upperbody.xml')
+smile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_smile.xml')
+eye_glasses_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye_tree_eyeglasses.xml')
+
 def process_frame(frame, timestamp):
     global current_description, current_processing_time, current_frame_size
     start_time = time.time()
@@ -142,8 +157,11 @@ def run_camera_mode():
     app.run(host='0.0.0.0', port=8000, debug=False, threaded=True)
 
 def generate_frames():
-    global cap, processing, last_capture, interval, show_overlay
-    while True:
+    global cap, processing, last_capture, interval, show_overlay, server_running
+    while server_running:
+        if not server_running:  # Check again before reading frame
+            break
+            
         if cap is None or not cap.isOpened():
             break
             
@@ -151,39 +169,110 @@ def generate_frames():
         if not ret:
             break
         
+        if not server_running:  # Check again before processing
+            break
+            
         # Keep a clean copy for AI processing (before overlays)
         clean_frame = frame.copy()
         
-        # Overlay description on frame for web display
+        # Detect objects based on selected mode
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        detected_objects = []
+        
+        if detection_mode in ['face_features', 'both']:
+            # Detect frontal faces
+            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+            for (x, y, w, h) in faces:
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+                cv2.putText(frame, 'Face', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 0, 0), 2)
+                detected_objects.append('Face')
+            
+            # Detect profile faces
+            profile_faces = profile_face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+            for (x, y, w, h) in profile_faces:
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 165, 0), 2)  # Orange
+                cv2.putText(frame, 'Profile', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 2)
+                detected_objects.append('Profile Face')
+            
+            # Detect eyes (within faces for better accuracy)
+            all_faces = list(faces) + list(profile_faces)
+            for (x, y, w, h) in all_faces:
+                if x >= 0 and y >= 0 and x+w <= frame.shape[1] and y+h <= frame.shape[0]:
+                    roi_gray = gray[y:y+h, x:x+w]
+                    roi_color = frame[y:y+h, x:x+w]
+                    eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=3, minSize=(20, 20))
+                    for (ex, ey, ew, eh) in eyes:
+                        cv2.rectangle(roi_color, (ex, ey), (ex+ew, ey+eh), (0, 255, 0), 2)
+                        cv2.putText(roi_color, 'Eye', (ex, ey-5), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                        detected_objects.append('Eye')
+                    
+                    # Detect smiles (within faces)
+                    smiles = smile_cascade.detectMultiScale(roi_gray, scaleFactor=1.8, minNeighbors=20, minSize=(25, 25))
+                    for (sx, sy, sw, sh) in smiles:
+                        cv2.rectangle(roi_color, (sx, sy), (sx+sw, sy+sh), (255, 255, 0), 2)  # Yellow
+                        cv2.putText(roi_color, 'Smile', (sx, sy-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                        detected_objects.append('Smile')
+            
+            # Detect eyes with glasses
+            eyes_glasses = eye_glasses_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(20, 20))
+            for (x, y, w, h) in eyes_glasses:
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 128, 255), 2)  # Light blue
+                cv2.putText(frame, 'Eye+Glasses', (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 128, 255), 2)
+                detected_objects.append('Eye with Glasses')
+        
+        if detection_mode in ['objects', 'both']:
+            # Detect full bodies
+            bodies = fullbody_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(60, 120))
+            for (x, y, w, h) in bodies:
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (128, 0, 128), 2)  # Purple
+                cv2.putText(frame, 'Body', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (128, 0, 128), 2)
+                detected_objects.append('Full Body')
+            
+            # Detect upper bodies
+            upper_bodies = upperbody_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(40, 80))
+            for (x, y, w, h) in upper_bodies:
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 255), 2)  # Cyan
+                cv2.putText(frame, 'Upper Body', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                detected_objects.append('Upper Body')
+        
+        # Create terminal-like window at bottom
+        frame_height, frame_width = frame.shape[:2]
+        terminal_height = 120
+        cv2.rectangle(frame, (0, frame_height - terminal_height), (frame_width, frame_height), (0, 0, 0), -1)
+        cv2.rectangle(frame, (0, frame_height - terminal_height), (frame_width, frame_height), (255, 255, 255), 2)
+        
+        # Display detected objects in terminal
+        y_pos = frame_height - terminal_height + 30
+        if detected_objects:
+            unique_objects = list(set(detected_objects))  # Remove duplicates
+            cv2.putText(frame, 'Detected Objects:', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            y_pos += 25
+            for obj in unique_objects:
+                cv2.putText(frame, f'- {obj}', (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                y_pos += 20
+        else:
+            cv2.putText(frame, 'No objects detected', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+        
+        # Overlay AI description if enabled (but simplified)
         if show_overlay and current_description:
-            frame_height = frame.shape[0]
-            # Start from bottom
-            y = frame_height - 100  # Start near bottom
-            
-            # Description in green bold
-            lines = current_description.split('.')
-            for line in lines:
-                line = line.strip()
-                if line:
-                    cv2.putText(frame, line + '.', (10, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 3)  # Green, thicker
-                    y += 40
-                    if y > frame_height - 10:
-                        break
-            
-            # Stats below in black
-            y += 20
-            if current_frame_size[0] > 0:
-                cv2.putText(frame, f"Resolution: {current_frame_size[0]}x{current_frame_size[1]}", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
-                y += 30
-            if current_processing_time > 0:
-                cv2.putText(frame, f"Processing: {current_processing_time:.2f}s", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
-                y += 30
-            cv2.putText(frame, f"FPS: {PROCESS_FPS}", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+            # Parse description for key objects (simple keyword extraction)
+            keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant', 'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door', 'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse', 'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch', 'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot']
+            found_objects = [word for word in keywords if word.lower() in current_description.lower()]
+            if found_objects:
+                y_pos += 20
+                cv2.putText(frame, 'AI Identified:', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                y_pos += 25
+                for obj in list(set(found_objects))[:5]:  # Limit to 5
+                    cv2.putText(frame, f'- {obj.title()}', (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                    y_pos += 20
         
         # Encode frame for streaming
         ret, buffer = cv2.imencode('.jpg', frame)
         frame_bytes = buffer.tobytes()
         
+        if not server_running:  # Final check before yielding frame
+            break
+            
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
         
@@ -202,7 +291,15 @@ def generate_frames():
             thread.daemon = True
             thread.start()
         
+        if not server_running:  # Check before sleep
+            break
+            
         time.sleep(0.1)  # Small delay to prevent overwhelming the stream
+    
+    # Cleanup when server stops
+    if cap is not None and cap.isOpened():
+        cap.release()
+        print("Camera released due to server stop")
 
 @app.route('/')
 def index():
@@ -271,12 +368,22 @@ def index():
                 <img src="/video_feed" alt="Camera Feed">
             </div>
             <div class="status">
-                <p>AI-powered object and scene recognition with live descriptions</p>
-                <p>Green text shows AI descriptions, black text shows performance stats</p>
+                <p>AI-powered object and scene recognition with selectable detection modes</p>
+                <p>Use the dropdown to choose: Face Features (eyes, smiles), Objects (bodies), or Both</p>
             </div>
             <div class="controls">
-                <button onclick="toggleOverlay()">Toggle Overlay</button>
+                <div style="margin: 10px 0;">
+                    <label for="detectionMode" style="font-weight: bold; margin-right: 10px;">Detection Mode:</label>
+                    <select id="detectionMode" onchange="changeDetectionMode(this.value)" style="padding: 8px; border-radius: 5px; border: 1px solid #ccc;">
+                        <option value="face_features">Face Features Only</option>
+                        <option value="objects">Objects Only</option>
+                        <option value="both">Face Features + Objects</option>
+                        <option value="none">No Detection</option>
+                    </select>
+                </div>
+                <button onclick="toggleOverlay()">Toggle AI Overlay</button>
                 <button onclick="location.reload()">Refresh</button>
+                <button onclick="stopServer()" style="background: #f44336; color: white;">Stop Server</button>
             </div>
         </div>
         
@@ -285,8 +392,28 @@ def index():
                 fetch('/toggle_overlay')
                     .then(response => response.json())
                     .then(data => {
-                        alert('Overlay ' + (data.overlay ? 'enabled' : 'disabled'));
+                        alert('AI Overlay ' + (data.overlay ? 'enabled' : 'disabled'));
                     });
+            }
+            
+            function changeDetectionMode(mode) {
+                fetch('/change_detection_mode', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ mode: mode })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    alert('Detection mode changed to: ' + data.mode);
+                });
+            }
+            
+            function stopServer() {
+                if (confirm('Are you sure you want to stop the server? This will end the vision analysis and close the video feed.')) {
+                    window.location.href = '/stop_server';
+                }
             }
         </script>
     </body>
@@ -302,6 +429,68 @@ def toggle_overlay():
     global show_overlay
     show_overlay = not show_overlay
     return {'overlay': show_overlay}
+
+@app.route('/change_detection_mode', methods=['POST'])
+def change_detection_mode():
+    global detection_mode
+    from flask import request
+    data = request.get_json()
+    new_mode = data.get('mode', 'face_features')
+    if new_mode in ['face_features', 'objects', 'both', 'none']:
+        detection_mode = new_mode
+        return {'mode': detection_mode, 'success': True}
+    return {'error': 'Invalid mode'}, 400
+
+@app.route('/stop_server')
+def stop_server():
+    global server_running
+    server_running = False
+    return '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Server Stopped</title>
+        <style>
+            body { 
+                font-family: Arial, sans-serif; 
+                margin: 0; 
+                padding: 20px; 
+                background: #f0f0f0; 
+                text-align: center;
+            }
+            .container { 
+                max-width: 600px; 
+                margin: 100px auto; 
+                background: white; 
+                padding: 40px; 
+                border-radius: 10px; 
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+            }
+            h1 { 
+                color: #f44336; 
+            }
+            p {
+                color: #666;
+                font-size: 18px;
+                margin: 20px 0;
+            }
+            .status {
+                color: #f44336;
+                font-weight: bold;
+                font-size: 20px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🛑 Server Stopped</h1>
+            <p class="status">The vision analysis server has been stopped.</p>
+            <p>The camera feed and AI processing have been terminated.</p>
+            <p>To restart, run the script again from the terminal.</p>
+        </div>
+    </body>
+    </html>
+    '''
 
 def run_image_mode(image_path):
     # Check if Ollama is running and moondream is available
