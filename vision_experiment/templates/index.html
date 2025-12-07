@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Vision Analysis</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 AI Vision Analysis System</h1>
+        </div>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="detectionModel">🔧 Detection Model (AI Library):</label>
+                <select id="detectionModel" onchange="changeDetectionModel()">
+                    <option value="yolov8">YOLOv8 AI (Most Capable)</option>
+                    <option value="tensorflow">TensorFlow AI</option>
+                    <option value="opencv">OpenCV (Lightweight)</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label for="detectionMode">🎯 Detection Mode (What to Detect):</label>
+                <select id="detectionMode" onchange="changeDetectionMode()">
+                    <option value="all_detection">All Detection</option>
+                    <option value="face_features">Face Features Only</option>
+                    <option value="people">People Detection Only</option>
+                    <option value="general_objects">General Objects Only</option>
+                    <option value="none">No Detection</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="processingFps">⚡ Processing Rate:</label>
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                    <select id="processingFpsSelect" onchange="changeProcessingFps()" style="min-width: 140px;">
+                        <optgroup label="Fast Processing">
+                            <option value="15 FPS">15 FPS (fast)</option>
+                            <option value="1 FPS">1 FPS (normal)</option>
+                        </optgroup>
+                        <optgroup label="Slow Intervals">
+                            <option value="0.5 FPS">Every 2 seconds</option>
+                            <option value="0.2 FPS">Every 5 seconds</option>
+                            <option value="0.1 FPS">Every 10 seconds</option>
+                            <option value="0.033 FPS">Every 30 seconds</option>
+                            <option value="0.017 FPS">Every 60 seconds</option>
+                        </optgroup>
+                    </select>
+                    <div style="display: flex; gap: 5px; align-items: center;">
+                        <span style="font-size: 12px; color: #666;">or</span>
+                        <input type="text" id="processingFpsInput" placeholder="e.g., 0.5 FPS, 2 FP 3s"
+                               style="padding: 6px; border: 1px solid #ccc; border-radius: 4px; width: 140px; font-size: 12px;"
+                               onkeypress="handleFpsInputKeyPress(event)"
+                               title="Examples: '0.5 FPS', '2 FP 3 seconds', '1 frame per 10 seconds'">
+                        <button onclick="applyCustomFps()" style="padding: 6px 10px; font-size: 11px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Apply</button>
+                    </div>
+                </div>
+                <div style="font-size: 11px; color: #666; margin-top: 4px;">
+                    Current: <span id="currentFpsDisplay">1 FPS</span>
+                </div>
+            </div>
+            
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                <button id="overlayBtn" class="overlay-toggle active" onclick="toggleOverlay()">🎨 AI Overlay: ON</button>
+                <button id="pauseBtn" class="btn-warning" onclick="togglePause()">⏸️ Pause</button>
+                <button class="btn-danger" onclick="stopServer()">Stop Server</button>
+                <button class="btn-success" onclick="refreshPage()">Refresh</button>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div class="top-row">
+                <div class="left-panel">
+                    <div class="detection-stats-panel">
+                        <div class="detection-stats-header">
+                            <span>📊 Detection Results</span>
+                            <button onclick="copyDetectionData()" style="padding: 4px 8px; font-size: 11px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">📋 Copy All</button>
+                        </div>
+                        <div class="detection-counts" id="detectionCounts">
+                            <span class="count-item"><strong>Detection:</strong> <span id="detectionCount">0</span></span>
+                            <span class="count-item"><strong>AI:</strong> <span id="aiCount">0</span></span>
+                            <span class="count-item"><strong>Combined:</strong> <span id="combinedCount">0</span></span>
+                            <span class="count-item"><strong>Avg Conf:</strong> <span id="avgConfidence">--</span></span>
+                        </div>
+                        <div class="detection-columns" id="detectionColumns">
+                            <div class="detection-column">
+                                <div class="column-header detection-header">DETECTION</div>
+                                <div class="column-content" id="detectionList">Loading...</div>
+                            </div>
+                            <div class="detection-column">
+                                <div class="column-header ai-header">AI</div>
+                                <div class="column-content" id="aiList">Loading...</div>
+                            </div>
+                            <div class="detection-column">
+                                <div class="column-header combined-header">DETECTION+AI</div>
+                                <div class="column-content" id="combinedList">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="video-section">
+                    <div class="video-container">
+                        <img src="/video_feed" alt="Live Video Feed">
+                    </div>
+                </div>
+                
+                <div class="right-panel">
+                    <div class="stats-section">
+                        <div class="status-banner" id="statusBanner">
+                            🔴 Active Model: YOLOV8 (Most Capable)
+                        </div>
+                        
+                        <div class="system-stats">
+                            <div class="system-stats-header">💻 System Resources</div>
+                            <div class="stats-row">
+                                <div class="stat-item">
+                                    <span class="stat-label">CPU</span>
+                                    <span class="stat-value" id="cpuUsage">--%</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">RAM</span>
+                                    <span class="stat-value" id="ramUsage">--%</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">GPU</span>
+                                    <span class="stat-value" id="gpuUsage">--%</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="performance-stats" id="performanceStats">
+                            <div><strong>Performance Stats:</strong></div>
+                            <div>Processing Time: --</div>
+                            <div>Frame Size: --</div>
+                            <div>Status: Initializing...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="bottom-row">
+                <div class="descriptions-section">
+                    <div class="descriptions-header">🤖 AI Scene Description</div>
+                    <div class="ai-description" id="aiDescription">
+                        Initializing AI vision analysis... Please wait for the first description to load.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
