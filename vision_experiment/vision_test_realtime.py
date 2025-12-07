@@ -36,8 +36,9 @@ last_capture = 0
 interval = 1.0 / PROCESS_FPS
 show_overlay = True
 
-# Detection mode control
-detection_mode = "face_features"  # Options: "face_features", "objects", "both", "none"
+# Detection control (separate model and mode)
+detection_model = "yolov8"  # Options: "yolov8", "tensorflow", "opencv"
+detection_mode = "all_detection"  # Options: "all_detection", "face_features", "people", "general_objects", "none"
 
 # Server control
 server_running = True
@@ -213,11 +214,11 @@ class TensorFlowDetector:
 
 # Initialize detectors
 yolo_detector = YOLODetector()
-tf_detector = TensorFlowDetector()
+tf_detector = None  # Initialize later when needed
 
 print(f"Advanced detectors status:")
 print(f"YOLOv8 available: {yolo_detector.available}")
-print(f"TensorFlow OD available: {tf_detector.available}")
+print(f"TensorFlow OD available: {TF_AVAILABLE}")
 
 def process_frame(frame, timestamp):
     global current_description, current_processing_time, current_frame_size
@@ -251,7 +252,7 @@ def process_frame(frame, timestamp):
             current_processing_time = processing_time
             height, width = frame.shape[:2]
             current_frame_size = (width, height)
-            print(f"[{time.strftime('%H:%M:%S')}] Frame: \033[92m{width}x{height}\033[0m | Processing: \033[92m{processing_time:.2f}s\033[0m | Description: {description}")
+            print(f"[\033[91mMODEL: {detection_model.upper()}\033[0m] Frame: \033[92m{width}x{height}\033[0m | Processing: \033[92m{processing_time:.2f}s\033[0m | Description: {description}")
             print("Press 'q' in camera window to exit")
         else:
             print(f"Error: \033[92m{response.status_code}\033[0m - {response.text}")
@@ -358,115 +359,131 @@ def generate_frames():
         # Keep a clean copy for AI processing (before overlays)
         clean_frame = frame.copy()
         
-        # Detect objects based on selected mode
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Apply detection based on selected model and mode
         detected_objects = []
         
-        if detection_mode in ['face_features', 'both', 'all']:
-            # Detect frontal faces
-            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-            for (x, y, w, h) in faces:
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
-                cv2.putText(frame, 'Face', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 0, 0), 2)
-                detected_objects.append('Face')
-            
-            # Detect profile faces
-            profile_faces = profile_face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-            for (x, y, w, h) in profile_faces:
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 165, 0), 2)  # Orange
-                cv2.putText(frame, 'Profile', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 2)
-                detected_objects.append('Profile Face')
-            
-            # Detect eyes (within faces for better accuracy)
-            all_faces = list(faces) + list(profile_faces)
-            for (x, y, w, h) in all_faces:
-                if x >= 0 and y >= 0 and x+w <= frame.shape[1] and y+h <= frame.shape[0] and w > 20 and h > 20:
-                    try:
-                        roi_gray = gray[y:y+h, x:x+w]
-                        roi_color = frame[y:y+h, x:x+w]
-                        if roi_gray.size > 0:
-                            eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=3, minSize=(20, 20))
-                            for (ex, ey, ew, eh) in eyes:
-                                cv2.rectangle(roi_color, (ex, ey), (ex+ew, ey+eh), (0, 255, 0), 2)
-                                cv2.putText(roi_color, 'Eye', (ex, ey-5), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-                                detected_objects.append('Eye')
-                            
-                            # Detect smiles (within faces)
-                            smiles = smile_cascade.detectMultiScale(roi_gray, scaleFactor=1.8, minNeighbors=20, minSize=(25, 25))
-                            for (sx, sy, sw, sh) in smiles:
-                                cv2.rectangle(roi_color, (sx, sy), (sx+sw, sy+sh), (255, 255, 0), 2)  # Yellow
-                                cv2.putText(roi_color, 'Smile', (sx, sy-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-                                detected_objects.append('Smile')
-                    except Exception as e:
-                        # Skip this face if detection fails
-                        continue
-            
-            # Detect eyes with glasses
-            try:
-                eyes_glasses = eye_glasses_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(20, 20))
-                for (x, y, w, h) in eyes_glasses:
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 128, 255), 2)  # Light blue
-                    cv2.putText(frame, 'Eye+Glasses', (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 128, 255), 2)
-                    detected_objects.append('Eye with Glasses')
-            except Exception as e:
-                # Skip eye glasses detection if it fails
-                pass
-        
-        if detection_mode in ['people', 'both', 'all']:
-            # Detect full bodies
-            bodies = fullbody_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(60, 120))
-            for (x, y, w, h) in bodies:
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (128, 0, 128), 2)  # Purple
-                cv2.putText(frame, 'Body', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (128, 0, 128), 2)
-                detected_objects.append('Full Body')
-            
-            # Detect upper bodies
-            upper_bodies = upperbody_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(40, 80))
-            for (x, y, w, h) in upper_bodies:
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 255), 2)  # Cyan
-                cv2.putText(frame, 'Upper Body', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                detected_objects.append('Upper Body')
-        
-        if detection_mode in ['objects', 'all']:
-            # Detect cars (only if cascade is available)
-            if car_cascade_loaded and car_cascade is not None:
-                try:
-                    cars = car_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(80, 80))
-                    for (x, y, w, h) in cars:
-                        cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 255), 2)  # Magenta
-                        cv2.putText(frame, 'Car', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
-                        detected_objects.append('Car')
-                except Exception as e:
-                    # Skip car detection if it fails
-                    pass
-            else:
-                # If car cascade not available, show message
-                detected_objects.append('Car detection unavailable')
-        
-        # Advanced detection modes using YOLOv8 and TensorFlow
-        if detection_mode == 'yolo':
-            if yolo_detector.available:
-                detections = yolo_detector.detect(frame)
-                for det in detections:
-                    x1, y1, x2, y2 = det['bbox']
+        if detection_model == "yolov8" and yolo_detector.available:
+            # YOLOv8 detection - comprehensive object detection
+            detections = yolo_detector.detect(frame)
+            for det in detections:
+                x1, y1, x2, y2 = det['bbox']
+                label = det['label']
+                confidence = det['confidence']
+                
+                # Filter based on detection mode
+                should_draw = False
+                if detection_mode == "all_detection":
+                    should_draw = True
+                elif detection_mode == "face_features" and label in ['person', 'face']:
+                    should_draw = True
+                elif detection_mode == "people" and label == 'person':
+                    should_draw = True
+                elif detection_mode == "general_objects" and label not in ['person']:
+                    should_draw = True
+                elif detection_mode == "none":
+                    should_draw = False
+                
+                if should_draw:
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)  # Yellow
-                    label = f"{det['label']}:{det['confidence']:.2f}"
-                    cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-                    detected_objects.append(det['label'])
-            else:
-                detected_objects.append('YOLOv8 not available')
-        
-        if detection_mode == 'tensorflow':
+                    cv2.putText(frame, f"{label}:{confidence:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                    detected_objects.append(f"{label} ({confidence:.2f})")
+                    
+        elif detection_model == "tensorflow":
+            # TensorFlow detection - initialize if needed
+            global tf_detector
+            if tf_detector is None:
+                tf_detector = TensorFlowDetector()
+            
             if tf_detector.available:
                 detections = tf_detector.detect(frame)
                 for det in detections:
                     x1, y1, x2, y2 = det['bbox']
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 165, 0), 2)  # Orange
-                    label = f"{det['label']}:{det['confidence']:.2f}"
-                    cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
-                    detected_objects.append(det['label'])
+                    label = det['label']
+                    confidence = det['confidence']
+                    
+                    # Filter based on detection mode
+                    should_draw = False
+                    if detection_mode == "all_detection":
+                        should_draw = True
+                    elif detection_mode == "face_features" and label in ['person']:
+                        should_draw = True
+                    elif detection_mode == "people" and label == 'person':
+                        should_draw = True
+                    elif detection_mode == "general_objects" and label not in ['person']:
+                        should_draw = True
+                    elif detection_mode == "none":
+                        should_draw = False
+                    
+                    if should_draw:
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 165, 0), 2)  # Orange
+                        cv2.putText(frame, f"{label}:{confidence:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
+                        detected_objects.append(f"{label} ({confidence:.2f})")
             else:
                 detected_objects.append('TensorFlow OD not available')
+                
+        elif detection_model == "opencv":
+            # OpenCV traditional detection
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            
+            if detection_mode in ['face_features', 'all_detection']:
+                # Detect frontal faces
+                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+                for (x, y, w, h) in faces:
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+                    cv2.putText(frame, 'Face', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 0, 0), 2)
+                    detected_objects.append('Face')
+                
+                # Detect profile faces
+                profile_faces = profile_face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+                for (x, y, w, h) in profile_faces:
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 165, 0), 2)
+                    cv2.putText(frame, 'Profile Face', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 2)
+                    detected_objects.append('Profile Face')
+                
+                # Detect eyes within faces
+                all_faces = list(faces) + list(profile_faces)
+                for (x, y, w, h) in all_faces:
+                    if x >= 0 and y >= 0 and x+w <= frame.shape[1] and y+h <= frame.shape[0] and w > 20 and h > 20:
+                        try:
+                            roi_gray = gray[y:y+h, x:x+w]
+                            roi_color = frame[y:y+h, x:x+w]
+                            if roi_gray.size > 0:
+                                eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=3, minSize=(20, 20))
+                                for (ex, ey, ew, eh) in eyes:
+                                    cv2.rectangle(roi_color, (ex, ey), (ex+ew, ey+eh), (0, 255, 0), 2)
+                                    cv2.putText(roi_color, 'Eye', (ex, ey-5), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                                    detected_objects.append('Eye')
+                        except:
+                            continue
+            
+            if detection_mode in ['people', 'all_detection']:
+                # Detect full bodies
+                bodies = fullbody_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(60, 120))
+                for (x, y, w, h) in bodies:
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), (128, 0, 128), 2)
+                    cv2.putText(frame, 'Full Body', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (128, 0, 128), 2)
+                    detected_objects.append('Full Body')
+                
+                # Detect upper bodies
+                upper_bodies = upperbody_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(40, 80))
+                for (x, y, w, h) in upper_bodies:
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 255), 2)
+                    cv2.putText(frame, 'Upper Body', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    detected_objects.append('Upper Body')
+            
+            if detection_mode in ['general_objects', 'all_detection']:
+                # Detect cars if available
+                if car_cascade_loaded and car_cascade is not None:
+                    try:
+                        cars = car_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(80, 80))
+                        for (x, y, w, h) in cars:
+                            cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 255), 2)
+                            cv2.putText(frame, 'Car', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
+                            detected_objects.append('Car')
+                    except:
+                        pass
+                else:
+                    detected_objects.append('Car detection unavailable')
         
         # Create terminal-like window at bottom
         frame_height, frame_width = frame.shape[:2]
@@ -498,6 +515,9 @@ def generate_frames():
                 for obj in list(set(found_objects))[:5]:  # Limit to 5
                     cv2.putText(frame, f'- {obj.title()}', (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
                     y_pos += 20
+        
+        # Store detected objects for terminal data endpoint
+        get_terminal_data.last_detected_objects = list(set(detected_objects)) if detected_objects else []
         
         # Encode frame for streaming
         ret, buffer = cv2.imencode('.jpg', frame)
@@ -540,118 +560,128 @@ def index():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Real-time Vision Analysis</title>
+        <title>AI Vision Analysis</title>
         <style>
-            body { 
-                font-family: Arial, sans-serif; 
-                margin: 0; 
-                padding: 20px; 
-                background: #f0f0f0; 
-            }
-            .container { 
-                max-width: 800px; 
-                margin: 0 auto; 
-                background: white; 
-                padding: 20px; 
-                border-radius: 10px; 
-                box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
-            }
-            h1 { 
-                color: #333; 
-                text-align: center; 
-            }
-            .video-container { 
-                text-align: center; 
-                margin: 20px 0; 
-            }
-            img { 
-                max-width: 100%; 
-                border: 2px solid #333; 
-                border-radius: 5px; 
-            }
-            .controls { 
-                text-align: center; 
-                margin: 20px 0; 
-            }
-            button { 
-                background: #4CAF50; 
-                color: white; 
-                border: none; 
-                padding: 10px 20px; 
-                margin: 0 10px; 
-                border-radius: 5px; 
-                cursor: pointer; 
-                font-size: 16px; 
-            }
-            button:hover { 
-                background: #45a049; 
-            }
-            .status { 
-                text-align: center; 
-                margin: 20px 0; 
-                font-size: 18px; 
-                color: #666; 
-            }
+            body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
+            .container { max-width: 1200px; margin: 0 auto; }
+            .controls { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+            .control-group { margin-bottom: 15px; }
+            label { display: block; margin-bottom: 5px; font-weight: bold; }
+            select { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 200px; }
+            button { padding: 10px 20px; margin: 5px; border: none; border-radius: 4px; cursor: pointer; }
+            .btn-primary { background: #007bff; color: white; }
+            .btn-danger { background: #dc3545; color: white; }
+            .btn-success { background: #28a745; color: white; }
+            .video-container { background: black; display: inline-block; position: relative; }
+            img { max-width: 100%; height: auto; }
+            .terminal { background: black; color: #00ff00; font-family: 'Courier New', monospace; 
+                      padding: 10px; margin-top: 10px; border-radius: 4px; font-size: 12px; 
+                      white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+            .status-banner { background: #dc3545; color: white; padding: 10px; border-radius: 4px; 
+                           font-weight: bold; text-align: center; margin-bottom: 20px; font-size: 18px; }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>Real-time Vision Analysis</h1>
-            <div class="video-container">
-                <img src="/video_feed" alt="Camera Feed">
+            <h1>🤖 AI Vision Analysis System</h1>
+            
+            <div class="status-banner" id="statusBanner">
+                🔴 Active Model: YOLOV8 (Most Capable)
             </div>
-            <div class="status">
-                <p>AI-powered object and scene recognition with selectable detection modes</p>
-                <p>Use the dropdown to choose: Face Features, People, General Objects, or combinations</p>
-            </div>
+            
             <div class="controls">
-                <div style="margin: 10px 0;">
-                    <label for="detectionMode" style="font-weight: bold; margin-right: 10px;">Detection Mode:</label>
-                    <select id="detectionMode" onchange="changeDetectionMode(this.value)" style="padding: 8px; border-radius: 5px; border: 1px solid #ccc;">
+                <div class="control-group">
+                    <label for="detectionModel">🔧 Detection Model (AI Library):</label>
+                    <select id="detectionModel" onchange="changeDetectionModel()">
+                        <option value="yolov8" selected>YOLOv8 AI (Most Capable)</option>
+                        <option value="tensorflow">TensorFlow AI</option>
+                        <option value="opencv">OpenCV (Lightweight)</option>
+                    </select>
+                </div>
+                
+                <div class="control-group">
+                    <label for="detectionMode">🎯 Detection Mode (What to Detect):</label>
+                    <select id="detectionMode" onchange="changeDetectionMode()">
+                        <option value="all_detection" selected>All Detection</option>
                         <option value="face_features">Face Features Only</option>
                         <option value="people">People Detection Only</option>
-                        <option value="objects">General Objects Only</option>
-                        <option value="both">Face Features + People</option>
-                        <option value="all">All Detection</option>
-                        <option value="yolo">YOLOv8 AI Detection</option>
-                        <option value="tensorflow">TensorFlow AI Detection</option>
+                        <option value="general_objects">General Objects Only</option>
                         <option value="none">No Detection</option>
                     </select>
                 </div>
-                <button onclick="toggleOverlay()">Toggle AI Overlay</button>
-                <button onclick="location.reload()">Refresh</button>
-                <button onclick="stopServer()" style="background: #f44336; color: white;">Stop Server</button>
+                
+                <button class="btn-primary" onclick="toggleOverlay()">Toggle AI Overlay</button>
+                <button class="btn-danger" onclick="stopServer()">Stop Server</button>
+                <button class="btn-success" onclick="refreshPage()">Refresh</button>
+            </div>
+            
+            <div class="video-container">
+                <img src="/video_feed" alt="Live Video Feed">
+            </div>
+            
+            <div class="terminal" id="terminal">
+Detected Objects:
+- Loading...
+
+AI Identified:
+- Initializing...
             </div>
         </div>
-        
+
         <script>
-            function toggleOverlay() {
-                fetch('/toggle_overlay')
-                    .then(response => response.json())
-                    .then(data => {
-                        alert('AI Overlay ' + (data.overlay ? 'enabled' : 'disabled'));
-                    });
+            function changeDetectionModel() {
+                const model = document.getElementById('detectionModel').value;
+                fetch('/change_detection_model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: model })
+                }).then(() => updateStatus());
             }
             
-            function changeDetectionMode(mode) {
+            function changeDetectionMode() {
+                const mode = document.getElementById('detectionMode').value;
                 fetch('/change_detection_mode', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ mode: mode })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    alert('Detection mode changed to: ' + data.mode);
                 });
             }
             
+            function toggleOverlay() {
+                fetch('/toggle_overlay');
+            }
+            
             function stopServer() {
-                if (confirm('Are you sure you want to stop the server? This will end the vision analysis and close the video feed.')) {
+                if (confirm('Are you sure you want to stop the server? This will end the vision analysis.')) {
                     window.location.href = '/stop_server';
                 }
             }
+            
+            function refreshPage() {
+                location.reload();
+            }
+            
+            function updateStatus() {
+                fetch('/get_status')
+                    .then(response => response.json())
+                    .then(data => {
+                        document.getElementById('statusBanner').textContent = 
+                            `🔴 Active Model: ${data.model} (${data.capability})`;
+                    });
+            }
+            
+            // Auto-refresh terminal and status every 2 seconds
+            setInterval(() => {
+                fetch('/get_terminal_data')
+                    .then(response => response.json())
+                    .then(data => {
+                        document.getElementById('terminal').textContent = data.terminal;
+                    });
+                updateStatus();
+            }, 2000);
+            
+            // Initial status update
+            updateStatus();
         </script>
     </body>
     </html>
@@ -672,11 +702,81 @@ def change_detection_mode():
     global detection_mode
     from flask import request
     data = request.get_json()
-    new_mode = data.get('mode', 'face_features')
-    if new_mode in ['face_features', 'people', 'both', 'none']:
+    new_mode = data.get('mode', 'all_detection')
+    if new_mode in ['all_detection', 'face_features', 'people', 'general_objects', 'none']:
         detection_mode = new_mode
+        print(f"Detection mode changed to: {detection_mode}")
         return {'mode': detection_mode, 'success': True}
     return {'error': 'Invalid mode'}, 400
+
+@app.route('/change_detection_model', methods=['POST'])
+def change_detection_model():
+    global detection_model
+    from flask import request
+    data = request.get_json()
+    new_model = data.get('model', 'yolov8')
+    if new_model in ['yolov8', 'tensorflow', 'opencv']:
+        detection_model = new_model
+        print(f"Detection model changed to: {detection_model}")
+        return {'model': detection_model, 'success': True}
+    return {'error': 'Invalid model'}, 400
+
+@app.route('/get_status')
+def get_status():
+    global detection_model, detection_mode, current_processing_time, current_frame_size
+    
+    # Get model capability description
+    model_capabilities = {
+        'yolov8': 'Most Capable',
+        'tensorflow': 'High Accuracy', 
+        'opencv': 'Lightweight'
+    }
+    
+    return {
+        'model': detection_model.upper(),
+        'capability': model_capabilities.get(detection_model, 'Unknown'),
+        'mode': detection_mode,
+        'processing_time': f"{current_processing_time:.2f}s",
+        'frame_size': f"{current_frame_size[0]}x{current_frame_size[1]}"
+    }
+
+@app.route('/get_terminal_data')
+def get_terminal_data():
+    # Initialize if not exists
+    if not hasattr(get_terminal_data, 'last_detected_objects'):
+        get_terminal_data.last_detected_objects = []
+    
+    global current_description
+    
+    # Get detected objects from the last frame processing
+    # This will be updated by the generate_frames function
+    detected_objects_text = "Detected Objects:\n"
+    if hasattr(get_terminal_data, 'last_detected_objects') and get_terminal_data.last_detected_objects:
+        for obj in get_terminal_data.last_detected_objects[:10]:  # Limit to 10 items
+            detected_objects_text += f"- {obj}\n"
+    else:
+        detected_objects_text += "- No objects detected\n"
+    
+    ai_text = "AI Identified:\n"
+    if current_description:
+        # Extract key objects from AI description
+        keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant', 
+                   'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door', 
+                   'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse', 
+                   'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch', 
+                   'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot']
+        
+        found_objects = [word for word in keywords if word.lower() in current_description.lower()]
+        if found_objects:
+            unique_objects = list(set(found_objects))[:8]  # Limit to 8 unique items
+            for obj in unique_objects:
+                ai_text += f"- {obj.title()}\n"
+        else:
+            ai_text += "- Processing scene...\n"
+    else:
+        ai_text += "- Initializing AI...\n"
+    
+    return {'terminal': detected_objects_text + "\n" + ai_text}
 
 @app.route('/stop_server')
 def stop_server():
