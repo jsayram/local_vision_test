@@ -6,6 +6,7 @@ import threading
 import os
 import platform
 from flask import Flask, Response, render_template_string
+from detection_manager import DetectionManager
 
 # Try to import advanced detection libraries (with fallbacks)
 try:
@@ -84,182 +85,8 @@ def parse_fps_string(fps_string):
 # Server control
 server_running = True
 
-# Load detection classifiers with error checking
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-profile_face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml')
-fullbody_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fullbody.xml')
-upperbody_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_upperbody.xml')
-smile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_smile.xml')
-eye_glasses_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye_tree_eyeglasses.xml')
-
-# Car cascade may not be available in all OpenCV installations
-car_cascade_path = cv2.data.haarcascades + 'haarcascade_car.xml'
-if os.path.exists(car_cascade_path):
-    car_cascade = cv2.CascadeClassifier(car_cascade_path)
-    car_cascade_loaded = car_cascade is not None and not car_cascade.empty()
-else:
-    car_cascade = None
-    car_cascade_loaded = False
-
-print(f"Cascade loading status:")
-print(f"Face cascade loaded: {face_cascade is not None and not face_cascade.empty()}")
-print(f"Eye cascade loaded: {eye_cascade is not None and not eye_cascade.empty()}")
-print(f"Profile face cascade loaded: {profile_face_cascade is not None and not profile_face_cascade.empty()}")
-print(f"Full body cascade loaded: {fullbody_cascade is not None and not fullbody_cascade.empty()}")
-print(f"Upper body cascade loaded: {upperbody_cascade is not None and not upperbody_cascade.empty()}")
-print(f"Smile cascade loaded: {smile_cascade is not None and not smile_cascade.empty()}")
-print(f"Eye glasses cascade loaded: {eye_glasses_cascade is not None and not eye_glasses_cascade.empty()}")
-print(f"Car cascade loaded: {car_cascade_loaded}")
-
-# Hardware detection for Raspberry Pi optimization
-def detect_hardware():
-    """Detect if running on Raspberry Pi and hardware capabilities"""
-    try:
-        with open('/proc/cpuinfo', 'r') as f:
-            cpuinfo = f.read()
-            if 'Raspberry Pi' in cpuinfo:
-                # Get Pi model
-                if 'Raspberry Pi 5' in cpuinfo:
-                    return {'platform': 'rpi5', 'cpu_cores': 4, 'ram_gb': 8, 'gpu': True}
-                elif 'Raspberry Pi 4' in cpuinfo:
-                    return {'platform': 'rpi4', 'cpu_cores': 4, 'ram_gb': 4, 'gpu': False}
-                elif 'Raspberry Pi 3' in cpuinfo:
-                    return {'platform': 'rpi3', 'cpu_cores': 4, 'ram_gb': 1, 'gpu': False}
-                else:
-                    return {'platform': 'rpi_other', 'cpu_cores': 1, 'ram_gb': 0.5, 'gpu': False}
-    except:
-        pass
-    return {'platform': 'desktop', 'cpu_cores': 8, 'ram_gb': 16, 'gpu': True}
-
-hardware_info = detect_hardware()
-print(f"Hardware detected: {hardware_info}")
-
-# Initialize advanced detectors with Raspberry Pi optimizations
-class YOLODetector:
-    def __init__(self):
-        self.available = False
-        self.model = None
-        if YOLO_AVAILABLE:
-            try:
-                # Use nano model for Raspberry Pi, small for desktop
-                model_size = 'yolov8n.pt' if hardware_info['platform'].startswith('rpi') else 'yolov8s.pt'
-                self.model = YOLO(model_size)
-                self.available = True
-                print(f"YOLOv8 {model_size} loaded successfully")
-            except Exception as e:
-                print(f"YOLOv8 failed to load: {e}")
-
-    def detect(self, frame):
-        if not self.available or self.model is None:
-            return []
-        try:
-            results = self.model(frame, conf=0.5, verbose=False)
-            detections = []
-            if len(results) > 0:
-                for box in results[0].boxes.data.tolist():
-                    x1, y1, x2, y2, conf, cls = box
-                    detections.append({
-                        'bbox': (int(x1), int(y1), int(x2), int(y2)),
-                        'confidence': conf,
-                        'class': int(cls),
-                        'label': results[0].names[int(cls)]
-                    })
-            return detections
-        except Exception as e:
-            print(f"YOLO detection error: {e}")
-            return []
-
-class TensorFlowDetector:
-    def __init__(self):
-        self.available = False
-        self.detector = None
-        global TF_AVAILABLE, tf, hub
-        if not TF_AVAILABLE:
-            try:
-                import tensorflow as tf
-                import tensorflow_hub as hub
-                TF_AVAILABLE = True
-            except ImportError:
-                TF_AVAILABLE = False
-                print("TensorFlow import failed")
-                return
-        
-        if TF_AVAILABLE:
-            try:
-                # Use efficient model for Raspberry Pi
-                if hardware_info['platform'].startswith('rpi'):
-                    model_url = "https://tfhub.dev/tensorflow/ssd_mobilenet_v2/2"
-                else:
-                    model_url = "https://tfhub.dev/tensorflow/ssd_mobilenet_v2/fpnlite_320x320/1"
-
-                self.detector = hub.load(model_url)
-                self.available = True
-                print("TensorFlow Object Detection loaded successfully")
-            except Exception as e:
-                print(f"TensorFlow OD failed to load: {e}")
-                self.available = False
-
-    def detect(self, frame):
-        if not self.available or self.detector is None:
-            return []
-        try:
-            # Convert to tensor
-            input_tensor = tf.convert_to_tensor(frame)
-            input_tensor = input_tensor[tf.newaxis, ...]
-
-            # Run detection
-            detections = self.detector(input_tensor)
-
-            results = []
-            detection_boxes = detections['detection_boxes'][0].numpy()
-            detection_classes = detections['detection_classes'][0].numpy().astype(int)
-            detection_scores = detections['detection_scores'][0].numpy()
-
-            # COCO class labels (simplified)
-            coco_labels = {
-                1: 'person', 2: 'bicycle', 3: 'car', 4: 'motorcycle', 5: 'airplane',
-                6: 'bus', 7: 'train', 8: 'truck', 9: 'boat', 10: 'traffic light',
-                11: 'fire hydrant', 13: 'stop sign', 14: 'parking meter', 15: 'bench',
-                16: 'bird', 17: 'cat', 18: 'dog', 19: 'horse', 20: 'sheep', 21: 'cow',
-                22: 'elephant', 23: 'bear', 24: 'zebra', 25: 'giraffe', 27: 'backpack',
-                28: 'umbrella', 31: 'handbag', 32: 'tie', 33: 'suitcase', 34: 'frisbee',
-                35: 'skis', 36: 'snowboard', 37: 'sports ball', 38: 'kite', 39: 'baseball bat',
-                40: 'baseball glove', 41: 'skateboard', 42: 'surfboard', 43: 'tennis racket',
-                44: 'bottle', 46: 'wine glass', 47: 'cup', 48: 'fork', 49: 'knife',
-                50: 'spoon', 51: 'bowl', 52: 'banana', 53: 'apple', 54: 'sandwich',
-                55: 'orange', 56: 'broccoli', 57: 'carrot', 58: 'hot dog', 59: 'pizza',
-                60: 'donut', 61: 'cake', 62: 'chair', 63: 'couch', 64: 'potted plant',
-                65: 'bed', 67: 'dining table', 70: 'toilet', 72: 'tv', 73: 'laptop',
-                74: 'mouse', 75: 'remote', 76: 'keyboard', 77: 'cell phone', 78: 'microwave',
-                79: 'oven', 80: 'toaster', 81: 'sink', 82: 'refrigerator', 84: 'book',
-                85: 'clock', 86: 'vase', 87: 'scissors', 88: 'teddy bear', 89: 'hair drier',
-                90: 'toothbrush'
-            }
-
-            for i, score in enumerate(detection_scores):
-                if score > 0.5:  # Confidence threshold
-                    box = detection_boxes[i]
-                    h, w = frame.shape[:2]
-                    y1, x1, y2, x2 = box
-                    results.append({
-                        'bbox': (int(x1 * w), int(y1 * h), int(x2 * w), int(y2 * h)),
-                        'confidence': float(score),
-                        'class': detection_classes[i],
-                        'label': coco_labels.get(detection_classes[i], f'class_{detection_classes[i]}')
-                    })
-            return results
-        except Exception as e:
-            print(f"TensorFlow detection error: {e}")
-            return []
-
-# Initialize detectors
-yolo_detector = YOLODetector()
-tf_detector = None  # Initialize later when needed
-
-print(f"Advanced detectors status:")
-print(f"YOLOv8 available: {yolo_detector.available}")
-print(f"TensorFlow OD available: {TF_AVAILABLE}")
+# Initialize detection manager
+detection_manager = DetectionManager()
 
 def process_frame(frame, timestamp):
     global current_description, current_processing_time, current_frame_size
@@ -378,6 +205,11 @@ def run_camera_mode():
     print("Starting web server at http://localhost:8000")
     print("Press Ctrl+C to stop")
     
+    # Configure Flask logging to reduce HTTP request noise
+    import logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.WARNING)  # Only show warnings and errors, not INFO level requests
+    
     # Start Flask app
     app.run(host='0.0.0.0', port=8000, debug=False, threaded=True)
 
@@ -415,145 +247,26 @@ def generate_frames():
         # Keep a clean copy for AI processing (before overlays)
         clean_frame = frame.copy()
         
-        # Apply detection based on selected model and mode
-        detected_objects = []
-        
-        if detection_model == "yolov8" and yolo_detector.available:
-            # YOLOv8 detection - comprehensive object detection
-            detections = yolo_detector.detect(frame)
-            for det in detections:
-                x1, y1, x2, y2 = det['bbox']
-                label = det['label']
-                confidence = det['confidence']
-                
-                # Filter based on detection mode
-                should_draw = False
-                if detection_mode == "all_detection":
-                    should_draw = True
-                elif detection_mode == "face_features" and label in ['person', 'face']:
-                    should_draw = True
-                elif detection_mode == "people" and label == 'person':
-                    should_draw = True
-                elif detection_mode == "general_objects" and label not in ['person']:
-                    should_draw = True
-                elif detection_mode == "none":
-                    should_draw = False
-                
-                if should_draw:
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)  # Yellow
-                    cv2.putText(frame, f"{label}:{confidence:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-                    detected_objects.append(f"{label} ({confidence:.2f})")
-                    
-        elif detection_model == "tensorflow":
-            # TensorFlow detection - initialize if needed
-            global tf_detector
-            if tf_detector is None:
-                tf_detector = TensorFlowDetector()
-            
-            if tf_detector.available:
-                detections = tf_detector.detect(frame)
-                for det in detections:
-                    x1, y1, x2, y2 = det['bbox']
-                    label = det['label']
-                    confidence = det['confidence']
-                    
-                    # Filter based on detection mode
-                    should_draw = False
-                    if detection_mode == "all_detection":
-                        should_draw = True
-                    elif detection_mode == "face_features" and label in ['person']:
-                        should_draw = True
-                    elif detection_mode == "people" and label == 'person':
-                        should_draw = True
-                    elif detection_mode == "general_objects" and label not in ['person']:
-                        should_draw = True
-                    elif detection_mode == "none":
-                        should_draw = False
-                    
-                    if should_draw:
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 165, 0), 2)  # Orange
-                        cv2.putText(frame, f"{label}:{confidence:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
-                        detected_objects.append(f"{label} ({confidence:.2f})")
-            else:
-                detected_objects.append('TensorFlow OD not available')
-                
-        elif detection_model == "opencv":
-            # OpenCV traditional detection
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            
-            if detection_mode in ['face_features', 'all_detection']:
-                # Detect frontal faces
-                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-                for (x, y, w, h) in faces:
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
-                    cv2.putText(frame, 'Face', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 0, 0), 2)
-                    detected_objects.append('Face')
-                
-                # Detect profile faces
-                profile_faces = profile_face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-                for (x, y, w, h) in profile_faces:
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 165, 0), 2)
-                    cv2.putText(frame, 'Profile Face', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 2)
-                    detected_objects.append('Profile Face')
-                
-                # Detect eyes within faces
-                all_faces = list(faces) + list(profile_faces)
-                for (x, y, w, h) in all_faces:
-                    if x >= 0 and y >= 0 and x+w <= frame.shape[1] and y+h <= frame.shape[0] and w > 20 and h > 20:
-                        try:
-                            roi_gray = gray[y:y+h, x:x+w]
-                            roi_color = frame[y:y+h, x:x+w]
-                            if roi_gray.size > 0:
-                                eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=3, minSize=(20, 20))
-                                for (ex, ey, ew, eh) in eyes:
-                                    cv2.rectangle(roi_color, (ex, ey), (ex+ew, ey+eh), (0, 255, 0), 2)
-                                    cv2.putText(roi_color, 'Eye', (ex, ey-5), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-                                    detected_objects.append('Eye')
-                        except:
-                            continue
-            
-            if detection_mode in ['people', 'all_detection']:
-                # Detect full bodies
-                bodies = fullbody_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(60, 120))
-                for (x, y, w, h) in bodies:
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (128, 0, 128), 2)
-                    cv2.putText(frame, 'Full Body', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (128, 0, 128), 2)
-                    detected_objects.append('Full Body')
-                
-                # Detect upper bodies
-                upper_bodies = upperbody_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(40, 80))
-                for (x, y, w, h) in upper_bodies:
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 255), 2)
-                    cv2.putText(frame, 'Upper Body', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                    detected_objects.append('Upper Body')
-            
-            if detection_mode in ['general_objects', 'all_detection']:
-                # Detect cars if available
-                if car_cascade_loaded and car_cascade is not None:
-                    try:
-                        cars = car_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(80, 80))
-                        for (x, y, w, h) in cars:
-                            cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 255), 2)
-                            cv2.putText(frame, 'Car', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
-                            detected_objects.append('Car')
-                    except:
-                        pass
-                else:
-                    detected_objects.append('Car detection unavailable')
-        
+        # Apply detection using DetectionManager
+        detections = detection_manager.detect_objects(frame, detection_model, detection_mode)
+        detected_objects = [f"{det['label']} ({det['confidence']:.2f})" for det in detections]
+
+        # Draw detections on frame
+        detection_manager.draw_detections(frame, detections)
+
         # Create terminal-like window at bottom
         frame_height, frame_width = frame.shape[:2]
         terminal_height = 120
         cv2.rectangle(frame, (0, frame_height - terminal_height), (frame_width, frame_height), (0, 0, 0), -1)
         cv2.rectangle(frame, (0, frame_height - terminal_height), (frame_width, frame_height), (255, 255, 255), 2)
-        
+
         # Display detected objects in terminal
         y_pos = frame_height - terminal_height + 30
         if detected_objects:
             unique_objects = list(set(detected_objects))  # Remove duplicates
             cv2.putText(frame, 'Detected Objects:', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             y_pos += 25
-            for obj in unique_objects:
+            for obj in unique_objects[:8]:  # Limit to 8 items to fit in terminal
                 cv2.putText(frame, f'- {obj}', (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
                 y_pos += 20
         else:
@@ -782,26 +495,32 @@ def index():
                 </div>
 
                 <div class="control-group">
-                    <label for="processingFps">⚡ Processing Rate (FPS/Interval):</label>
-                    <div style="display: flex; gap: 5px; align-items: center;">
-                        <select id="processingFpsSelect" onchange="changeProcessingFps()">
-                            <option value="1 FPS">1 FPS</option>
-                            <option value="15 FPS">15 FPS</option>
-                            <option value="1 FP 2 seconds">1 FP 2 seconds</option>
-                            <option value="1 FP 5 seconds">1 FP 5 seconds</option>
-                            <option value="1 FP 10 seconds">1 FP 10 seconds</option>
-                            <option value="1 FP 30 seconds">1 FP 30 seconds</option>
-                            <option value="1 FP 60 seconds">1 FP 60 seconds</option>
-                            <option value="1 frame per 2 seconds">1 frame per 2 seconds</option>
-                            <option value="1 frame per 5 seconds">1 frame per 5 seconds</option>
-                            <option value="1 frame per 10 seconds">1 frame per 10 seconds</option>
-                            <option value="1 frame per 30 seconds">1 frame per 30 seconds</option>
-                            <option value="1 frame per 60 seconds">1 frame per 60 seconds</option>
+                    <label for="processingFps">⚡ Processing Rate:</label>
+                    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                        <select id="processingFpsSelect" onchange="changeProcessingFps()" style="min-width: 140px;">
+                            <optgroup label="Fast Processing">
+                                <option value="15 FPS">15 FPS (fast)</option>
+                                <option value="1 FPS">1 FPS (normal)</option>
+                            </optgroup>
+                            <optgroup label="Slow Intervals">
+                                <option value="0.5 FPS">Every 2 seconds</option>
+                                <option value="0.2 FPS">Every 5 seconds</option>
+                                <option value="0.1 FPS">Every 10 seconds</option>
+                                <option value="0.033 FPS">Every 30 seconds</option>
+                                <option value="0.017 FPS">Every 60 seconds</option>
+                            </optgroup>
                         </select>
-                        <input type="text" id="processingFpsInput" placeholder="Custom FPS..." 
-                               style="padding: 6px; border: 1px solid #ccc; border-radius: 4px; width: 120px;" 
-                               onkeypress="handleFpsInputKeyPress(event)">
-                        <button onclick="applyCustomFps()" style="padding: 6px 12px; font-size: 12px;">Apply</button>
+                        <div style="display: flex; gap: 5px; align-items: center;">
+                            <span style="font-size: 12px; color: #666;">or</span>
+                            <input type="text" id="processingFpsInput" placeholder="e.g., 0.5 FPS, 2 FP 3s"
+                                   style="padding: 6px; border: 1px solid #ccc; border-radius: 4px; width: 140px; font-size: 12px;"
+                                   onkeypress="handleFpsInputKeyPress(event)"
+                                   title="Examples: '0.5 FPS', '2 FP 3 seconds', '1 frame per 10 seconds'">
+                            <button onclick="applyCustomFps()" style="padding: 6px 10px; font-size: 11px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Apply</button>
+                        </div>
+                    </div>
+                    <div style="font-size: 11px; color: #666; margin-top: 4px;">
+                        Current: <span id="currentFpsDisplay">1 FPS</span>
                     </div>
                 </div>
                 
@@ -924,7 +643,11 @@ AI Identified:
                         // Handle FPS selection/input
                         const fpsSelect = document.getElementById('processingFpsSelect');
                         const fpsInput = document.getElementById('processingFpsInput');
+                        const currentFpsDisplay = document.getElementById('currentFpsDisplay');
                         const currentFps = data.fps;
+                        
+                        // Update current FPS display
+                        currentFpsDisplay.textContent = currentFps;
                         
                         // Check if current FPS is in the dropdown options
                         const options = Array.from(fpsSelect.options).map(opt => opt.value);
@@ -1179,7 +902,7 @@ def restart_server():
         processing = False
         last_capture = 0
         show_overlay = True
-        detection_mode = "face_features"
+        detection_mode = "all_detection"  # Use default detection mode
         current_description = ""
         current_processing_time = 0.0
         current_frame_size = (0, 0)
