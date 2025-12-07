@@ -5,6 +5,8 @@ import time
 import threading
 import os
 import platform
+import signal
+import atexit
 from flask import Flask, Response, render_template, send_from_directory
 from detection_manager import DetectionManager
 
@@ -158,6 +160,30 @@ server_running = True
 # Initialize detection manager
 detection_manager = DetectionManager()
 
+def cleanup_camera():
+    """Ensure camera is properly released on exit"""
+    global cap
+    if cap is not None:
+        if cap.isOpened():
+            cap.release()
+            print("Camera released during cleanup")
+        cap = None
+
+# Register cleanup handlers
+atexit.register(cleanup_camera)
+
+def signal_handler(signum, frame):
+    """Handle interrupt signals to ensure clean shutdown"""
+    global server_running
+    print(f"\nReceived signal {signum}, shutting down gracefully...")
+    server_running = False
+    cleanup_camera()
+    exit(0)
+
+# Register signal handlers
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
 def process_frame(frame, timestamp):
     global current_description, current_processing_time, current_frame_size
     start_time = time.time()
@@ -286,136 +312,138 @@ def run_camera_mode():
 def generate_frames():
     global cap, processing, last_capture, interval, show_overlay, server_running, processing_fps, paused
     last_frame = None  # Store last frame for pause mode
-    
-    while server_running:
-        if not server_running:  # Check again before reading frame
-            break
-            
-        if cap is None or not cap.isOpened():
-            break
-        
-        # If paused, keep yielding the last frame
-        if paused and last_frame is not None:
-            ret, buffer = cv2.imencode('.jpg', last_frame)
+
+    try:
+        while server_running:
+            if not server_running:  # Check again before reading frame
+                break
+
+            if cap is None or not cap.isOpened():
+                break
+
+            # If paused, keep yielding the last frame
+            if paused and last_frame is not None:
+                ret, buffer = cv2.imencode('.jpg', last_frame)
+                frame_bytes = buffer.tobytes()
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                time.sleep(0.1)
+                continue
+
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            if not server_running:  # Check again before processing
+                break
+
+            # Update interval based on current FPS setting
+            interval = parse_fps_string(processing_fps)
+            if not server_running:  # Check again before reading frame
+                break
+
+            if cap is None or not cap.isOpened():
+                break
+
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            if not server_running:  # Check again before processing
+                break
+
+            # Keep a clean copy for AI processing (before overlays)
+            clean_frame = frame.copy()
+
+            # Only apply detection and overlays if show_overlay is True
+            if show_overlay:
+                # Apply detection using DetectionManager
+                detections = detection_manager.detect_objects(frame, detection_model, detection_mode)
+                detected_objects = [f"{det['label']} ({det['confidence']:.2f})" for det in detections]
+
+                # Draw detections on frame
+                detection_manager.draw_detections(frame, detections)
+            else:
+                # No overlay - just use clean frame, no detections displayed
+                detections = []
+                detected_objects = []
+
+            frame_height, frame_width = frame.shape[:2]
+
+            # Get detection objects with confidence (always compute for web UI)
+            detection_objects = [f"{det['label'].title()} ({det['confidence']:.2f})" for det in detections]
+
+            # Get AI objects
+            ai_objects = []
+            if current_description:
+                keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant',
+                           'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door',
+                           'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse',
+                           'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch',
+                           'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot', 'potted plant']
+                description_lower = current_description.lower()
+                ai_objects = [word.title() for word in keywords if word.lower() in description_lower]
+                ai_objects = list(set(ai_objects))  # Remove duplicates
+
+            # Get correlated results
+            correlated_results = correlate_ai_detection(current_description, detections) if (detections or ai_objects) else []
+
+            # Store data for web UI endpoint (always available, even when overlay is off)
+            get_terminal_data.detection_objects = detection_objects
+            get_terminal_data.ai_objects = ai_objects
+            get_terminal_data.correlated_objects = [f"{obj} ({conf:.2f}) [{source}]" for obj, conf, source in correlated_results]
+
+            # Calculate stats for web UI
+            if correlated_results:
+                avg_conf = sum(c[1] for c in correlated_results) / len(correlated_results)
+                get_terminal_data.avg_confidence = f"{avg_conf:.0%}"
+                get_terminal_data.detection_count = len(detection_objects)
+                get_terminal_data.ai_count = len(ai_objects)
+                get_terminal_data.combined_count = len(correlated_results)
+            else:
+                get_terminal_data.avg_confidence = "--"
+                get_terminal_data.detection_count = len(detection_objects)
+                get_terminal_data.ai_count = len(ai_objects)
+                get_terminal_data.combined_count = 0
+
+            # Store the frame for pause mode
+            last_frame = frame.copy()
+
+            # Encode frame for streaming
+            ret, buffer = cv2.imencode('.jpg', frame)
             frame_bytes = buffer.tobytes()
+
+            if not server_running:  # Final check before yielding frame
+                break
+
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            time.sleep(0.1)
-            continue
-            
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        if not server_running:  # Check again before processing
-            break
-            
-        # Update interval based on current FPS setting
-        interval = parse_fps_string(processing_fps)
-        if not server_running:  # Check again before reading frame
-            break
-            
-        if cap is None or not cap.isOpened():
-            break
-            
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        if not server_running:  # Check again before processing
-            break
-            
-        # Keep a clean copy for AI processing (before overlays)
-        clean_frame = frame.copy()
-        
-        # Only apply detection and overlays if show_overlay is True
-        if show_overlay:
-            # Apply detection using DetectionManager
-            detections = detection_manager.detect_objects(frame, detection_model, detection_mode)
-            detected_objects = [f"{det['label']} ({det['confidence']:.2f})" for det in detections]
 
-            # Draw detections on frame
-            detection_manager.draw_detections(frame, detections)
-        else:
-            # No overlay - just use clean frame, no detections displayed
-            detections = []
-            detected_objects = []
+            # Check if we should process this frame (skip if paused)
+            current_time = time.time()
+            if current_time - last_capture > interval and not processing and not paused:
+                processing = True
+                last_capture = current_time
+                # Start processing thread - use clean_frame without overlays
+                frame_to_process = clean_frame.copy()
+                def process_and_reset():
+                    process_frame(frame_to_process, current_time)
+                    global processing
+                    processing = False
+                thread = threading.Thread(target=process_and_reset)
+                thread.daemon = True
+                thread.start()
 
-        frame_height, frame_width = frame.shape[:2]
-        
-        # Get detection objects with confidence (always compute for web UI)
-        detection_objects = [f"{det['label'].title()} ({det['confidence']:.2f})" for det in detections]
+            if not server_running:  # Check before sleep
+                break
 
-        # Get AI objects
-        ai_objects = []
-        if current_description:
-            keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant',
-                       'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door',
-                       'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse',
-                       'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch',
-                       'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot', 'potted plant']
-            description_lower = current_description.lower()
-            ai_objects = [word.title() for word in keywords if word.lower() in description_lower]
-            ai_objects = list(set(ai_objects))  # Remove duplicates
+            time.sleep(0.1)  # Small delay to prevent overwhelming the stream
 
-        # Get correlated results
-        correlated_results = correlate_ai_detection(current_description, detections) if (detections or ai_objects) else []
-        
-        # Store data for web UI endpoint (always available, even when overlay is off)
-        get_terminal_data.detection_objects = detection_objects
-        get_terminal_data.ai_objects = ai_objects
-        get_terminal_data.correlated_objects = [f"{obj} ({conf:.2f}) [{source}]" for obj, conf, source in correlated_results]
-        
-        # Calculate stats for web UI
-        if correlated_results:
-            avg_conf = sum(c[1] for c in correlated_results) / len(correlated_results)
-            get_terminal_data.avg_confidence = f"{avg_conf:.0%}"
-            get_terminal_data.detection_count = len(detection_objects)
-            get_terminal_data.ai_count = len(ai_objects)
-            get_terminal_data.combined_count = len(correlated_results)
-        else:
-            get_terminal_data.avg_confidence = "--"
-            get_terminal_data.detection_count = len(detection_objects)
-            get_terminal_data.ai_count = len(ai_objects)
-            get_terminal_data.combined_count = 0
-        
-        # Store the frame for pause mode
-        last_frame = frame.copy()
-        
-        # Encode frame for streaming
-        ret, buffer = cv2.imencode('.jpg', frame)
-        frame_bytes = buffer.tobytes()
-        
-        if not server_running:  # Final check before yielding frame
-            break
-            
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-        
-        # Check if we should process this frame (skip if paused)
-        current_time = time.time()
-        if current_time - last_capture > interval and not processing and not paused:
-            processing = True
-            last_capture = current_time
-            # Start processing thread - use clean_frame without overlays
-            frame_to_process = clean_frame.copy()
-            def process_and_reset():
-                process_frame(frame_to_process, current_time)
-                global processing
-                processing = False
-            thread = threading.Thread(target=process_and_reset)
-            thread.daemon = True
-            thread.start()
-        
-        if not server_running:  # Check before sleep
-            break
-            
-        time.sleep(0.1)  # Small delay to prevent overwhelming the stream
-    
-    # Cleanup when server stops
-    if cap is not None and cap.isOpened():
-        cap.release()
-        print("Camera released due to server stop")
+    finally:
+        # Cleanup when server stops or generator is interrupted
+        if cap is not None and cap.isOpened():
+            cap.release()
+            print("Camera released due to server stop or interruption")
 
 @app.route('/')
 def index():
@@ -574,29 +602,36 @@ def get_system_stats():
 def stop_server():
     global server_running
     server_running = False
+
+    # Give some time for cleanup
+    time.sleep(0.5)
+
+    # Ensure camera is released
+    cleanup_camera()
+
     return '''
     <!DOCTYPE html>
     <html>
     <head>
         <title>Server Stopped</title>
         <style>
-            body { 
-                font-family: Arial, sans-serif; 
-                margin: 0; 
-                padding: 20px; 
-                background: #f0f0f0; 
+            body {
+                font-family: Arial, sans-serif;
+                margin: 0;
+                padding: 20px;
+                background: #f0f0f0;
                 text-align: center;
             }
-            .container { 
-                max-width: 600px; 
-                margin: 100px auto; 
-                background: white; 
-                padding: 40px; 
-                border-radius: 10px; 
-                box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+            .container {
+                max-width: 600px;
+                margin: 100px auto;
+                background: white;
+                padding: 40px;
+                border-radius: 10px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             }
-            h1 { 
-                color: #f44336; 
+            h1 {
+                color: #f44336;
             }
             p {
                 color: #666;
@@ -631,7 +666,7 @@ def stop_server():
             <button class="restart-btn" onclick="restartServer()">🔄 Restart Vision System</button>
             <p style="margin-top: 20px; font-size: 16px; color: #888;">Or run the script again from the terminal.</p>
         </div>
-        
+
         <script>
             function restartServer() {
                 if (confirm('Are you sure you want to restart the vision system?')) {
