@@ -338,97 +338,41 @@ def generate_frames():
 
         frame_height, frame_width = frame.shape[:2]
         
-        # Only show terminal overlay when overlay is enabled
-        if show_overlay:
-            # Create terminal-like window at bottom (increased height for better display)
-            terminal_height = 220  # Increased for bigger text
-            cv2.rectangle(frame, (0, frame_height - terminal_height), (frame_width, frame_height), (0, 0, 0), -1)
-            cv2.rectangle(frame, (0, frame_height - terminal_height), (frame_width, frame_height), (255, 255, 255), 2)
+        # Get detection objects with confidence (always compute for web UI)
+        detection_objects = [f"{det['label'].title()} ({det['confidence']:.2f})" for det in detections]
 
-            # Display three-column view: Detection | AI | Detection+AI with better formatting
-            y_pos = frame_height - terminal_height + 30
+        # Get AI objects
+        ai_objects = []
+        if current_description:
+            keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant',
+                       'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door',
+                       'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse',
+                       'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch',
+                       'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot', 'potted plant']
+            description_lower = current_description.lower()
+            ai_objects = [word.title() for word in keywords if word.lower() in description_lower]
+            ai_objects = list(set(ai_objects))  # Remove duplicates
 
-            # Get detection objects with confidence
-            detection_objects = [f"{det['label'].title()} ({det['confidence']:.2f})" for det in detections]
-
-            # Get AI objects
-            ai_objects = []
-            if current_description:
-                keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant',
-                           'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door',
-                           'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse',
-                           'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch',
-                           'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot', 'potted plant']
-                description_lower = current_description.lower()
-                ai_objects = [word.title() for word in keywords if word.lower() in description_lower]
-                ai_objects = list(set(ai_objects))  # Remove duplicates
-
-            # Get correlated results
-            correlated_results = correlate_ai_detection(current_description, detections) if (detections or ai_objects) else []
-
-            # Column headers with BIGGER TEXT
-            col_width = frame_width // 3
-            cv2.putText(frame, 'DETECTION', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-            cv2.putText(frame, 'AI', (col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 2)
-            cv2.putText(frame, 'DETECTION+AI', (2 * col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
-
-            # Draw column separators
-            cv2.line(frame, (col_width, frame_height - terminal_height), (col_width, frame_height), (255, 255, 255), 2)
-            cv2.line(frame, (2 * col_width, frame_height - terminal_height), (2 * col_width, frame_height), (255, 255, 255), 2)
-
-            y_pos += 30
-
-            # Display items in each column with BIGGER TEXT (max 6 per column)
-            max_items = 6
-            for i in range(max_items):
-                # Detection column - show with confidence in bigger text
-                if i < len(detection_objects):
-                    text = detection_objects[i]
-                    # Truncate if too long to prevent wrapping
-                    if len(text) > 20:
-                        text = text[:17] + "..."
-                    cv2.putText(frame, f'{text}', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
-                # AI column
-                if i < len(ai_objects):
-                    text = ai_objects[i]
-                    if len(text) > 14:
-                        text = text[:11] + "..."
-                    cv2.putText(frame, f'{text}', (col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
-                # Detection+AI column - show confidence prominently
-                if i < len(correlated_results):
-                    obj_name, conf, source = correlated_results[i]
-                    text = f"{obj_name} ({conf:.0%})"  # Show as percentage for clarity
-                    if len(text) > 22:
-                        text = text[:19] + "..."
-                    # Color code by source
-                    if source == "AI + Detection":
-                        color = (0, 255, 0)  # Green for both
-                    elif source == "Detection Only":
-                        color = (255, 255, 0)  # Yellow for detection only
-                    else:  # AI Only
-                        color = (255, 165, 0)  # Orange for AI only
-
-                    cv2.putText(frame, f'{text}', (2 * col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
-
-                y_pos += 28  # Bigger line spacing
-            
-            # Add overall confidence summary at bottom
-            if correlated_results:
-                avg_conf = sum(c[1] for c in correlated_results) / len(correlated_results)
-                conf_text = f"Avg Confidence: {avg_conf:.0%} | Objects: {len(correlated_results)}"
-                cv2.putText(frame, conf_text, (10, frame_height - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            
-            # Store data for terminal endpoint
-            get_terminal_data.detection_objects = detection_objects
-            get_terminal_data.ai_objects = ai_objects
-            get_terminal_data.correlated_objects = [f"{obj} ({conf:.2f}) [{source}]" for obj, conf, source in correlated_results]
+        # Get correlated results
+        correlated_results = correlate_ai_detection(current_description, detections) if (detections or ai_objects) else []
+        
+        # Store data for web UI endpoint (always available, even when overlay is off)
+        get_terminal_data.detection_objects = detection_objects
+        get_terminal_data.ai_objects = ai_objects
+        get_terminal_data.correlated_objects = [f"{obj} ({conf:.2f}) [{source}]" for obj, conf, source in correlated_results]
+        
+        # Calculate stats for web UI
+        if correlated_results:
+            avg_conf = sum(c[1] for c in correlated_results) / len(correlated_results)
+            get_terminal_data.avg_confidence = f"{avg_conf:.0%}"
+            get_terminal_data.detection_count = len(detection_objects)
+            get_terminal_data.ai_count = len(ai_objects)
+            get_terminal_data.combined_count = len(correlated_results)
         else:
-            # No overlay - store empty data
-            get_terminal_data.detection_objects = []
-            get_terminal_data.ai_objects = []
-            get_terminal_data.correlated_objects = []
+            get_terminal_data.avg_confidence = "--"
+            get_terminal_data.detection_count = len(detection_objects)
+            get_terminal_data.ai_count = len(ai_objects)
+            get_terminal_data.combined_count = 0
         
         # Store the frame for pause mode
         last_frame = frame.copy()
@@ -498,8 +442,19 @@ def index():
             .main-content {
                 flex: 1;
                 display: flex;
+                flex-direction: column;
                 gap: 20px;
                 min-height: 0;
+                overflow: auto;
+            }
+            .top-row {
+                display: flex;
+                gap: 20px;
+                flex: 1;
+                min-height: 400px;
+            }
+            .bottom-row {
+                flex-shrink: 0;
             }
             .controls { 
                 background: white; 
@@ -564,8 +519,8 @@ def index():
                 display: flex;
                 flex-direction: column;
                 gap: 15px;
-                min-width: 400px;
-                max-width: 500px;
+                min-width: 350px;
+                max-width: 450px;
             }
             .stats-section {
                 flex-shrink: 0;
@@ -583,30 +538,85 @@ def index():
                 font-size: 16px;
                 flex-shrink: 0;
             }
-            .terminal { 
-                background: black; 
-                color: #00ff00; 
-                font-family: 'Courier New', monospace; 
-                padding: 12px; 
-                border-radius: 8px; 
-                font-size: 12px; 
-                white-space: pre; 
+            .detection-stats-panel {
+                background: #1a1a2e;
+                border-radius: 8px;
+                padding: 15px;
                 flex: 1;
-                overflow-x: auto;
-                overflow-y: auto;
                 min-height: 200px;
-                max-height: none;
-                word-wrap: normal;
-                word-break: keep-all;
+                display: flex;
+                flex-direction: column;
+            }
+            .detection-stats-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 10px;
+                padding-bottom: 8px;
+                border-bottom: 2px solid #00ff00;
+                color: #00ff00;
+                font-weight: bold;
+                font-size: 16px;
+            }
+            .detection-counts {
+                display: flex;
+                gap: 15px;
+                margin-bottom: 12px;
+                padding: 8px;
+                background: #0f0f1a;
+                border-radius: 6px;
+                flex-wrap: wrap;
+            }
+            .count-item {
+                color: #fff;
+                font-family: 'Courier New', monospace;
+                font-size: 13px;
+            }
+            .count-item span {
+                color: #00ff00;
+            }
+            .detection-columns {
+                display: flex;
+                gap: 10px;
+                flex: 1;
+            }
+            .detection-column {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                min-width: 0;
+            }
+            .column-header {
+                font-weight: bold;
+                padding: 6px 8px;
+                border-radius: 4px 4px 0 0;
+                font-size: 14px;
+                text-align: center;
+            }
+            .detection-header { background: #28a745; color: white; }
+            .ai-header { background: #ffc107; color: #212529; }
+            .combined-header { background: #17a2b8; color: white; }
+            .column-content {
+                background: #0f0f1a;
+                padding: 10px;
+                border-radius: 0 0 4px 4px;
+                flex: 1;
+                overflow-y: auto;
+                font-family: 'Courier New', monospace;
+                font-size: 13px;
+                color: #fff;
+                user-select: text;
+                cursor: text;
+                line-height: 1.6;
             }
             .descriptions-section {
                 background: white;
                 padding: 15px;
                 border-radius: 8px;
-                flex: 1;
                 display: flex;
                 flex-direction: column;
-                min-height: 150px;
+                width: 100%;
+                box-sizing: border-box;
             }
             .descriptions-header {
                 font-weight: bold;
@@ -622,11 +632,11 @@ def index():
                 border-left: 4px solid #007bff;
                 font-family: Arial, sans-serif;
                 font-size: 14px;
-                line-height: 1.5;
+                line-height: 1.6;
                 color: #333;
-                flex: 1;
+                max-height: 120px;
                 overflow-y: auto;
-                white-space: pre-wrap;
+                white-space: normal;
                 word-wrap: break-word;
             }
             .system-stats {
@@ -693,18 +703,41 @@ def index():
             .overlay-toggle.inactive {
                 background: #6c757d;
             }
-            @media (max-width: 1200px) {
-                .main-content {
+            @media (max-width: 1400px) {
+                .top-row {
                     flex-direction: column;
                 }
                 .right-panel {
                     width: 100%;
                     max-width: none;
                     min-width: 0;
-                    order: -1;
                 }
                 .video-section {
-                    order: 1;
+                    min-height: 400px;
+                }
+                .video-container {
+                    min-height: 350px;
+                }
+            }
+            @media (max-width: 768px) {
+                body {
+                    padding: 10px;
+                }
+                .controls {
+                    padding: 10px;
+                }
+                .control-group {
+                    flex-direction: column;
+                    align-items: flex-start;
+                }
+                .control-group label {
+                    min-width: auto;
+                }
+                .detection-columns {
+                    flex-direction: column;
+                }
+                .detection-column {
+                    min-height: 100px;
                 }
             }
         </style>
@@ -775,52 +808,75 @@ def index():
             </div>
             
             <div class="main-content">
-                <div class="video-section">
-                    <div class="video-container">
-                        <img src="/video_feed" alt="Live Video Feed">
-                    </div>
-                </div>
-                
-                <div class="right-panel">
-                    <div class="stats-section">
-                        <div class="status-banner" id="statusBanner">
-                            🔴 Active Model: YOLOV8 (Most Capable)
+                <div class="top-row">
+                    <div class="video-section">
+                        <div class="video-container">
+                            <img src="/video_feed" alt="Live Video Feed">
                         </div>
-                        
-                        <div class="system-stats">
-                            <div class="system-stats-header">💻 System Resources</div>
-                            <div class="stats-row">
-                                <div class="stat-item">
-                                    <span class="stat-label">CPU</span>
-                                    <span class="stat-value" id="cpuUsage">--%</span>
+                    </div>
+                    
+                    <div class="right-panel">
+                        <div class="stats-section">
+                            <div class="status-banner" id="statusBanner">
+                                🔴 Active Model: YOLOV8 (Most Capable)
+                            </div>
+                            
+                            <div class="system-stats">
+                                <div class="system-stats-header">💻 System Resources</div>
+                                <div class="stats-row">
+                                    <div class="stat-item">
+                                        <span class="stat-label">CPU</span>
+                                        <span class="stat-value" id="cpuUsage">--%</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">RAM</span>
+                                        <span class="stat-value" id="ramUsage">--%</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">GPU</span>
+                                        <span class="stat-value" id="gpuUsage">--%</span>
+                                    </div>
                                 </div>
-                                <div class="stat-item">
-                                    <span class="stat-label">RAM</span>
-                                    <span class="stat-value" id="ramUsage">--%</span>
-                                </div>
-                                <div class="stat-item">
-                                    <span class="stat-label">GPU</span>
-                                    <span class="stat-value" id="gpuUsage">--%</span>
-                                </div>
+                            </div>
+                            
+                            <div class="performance-stats" id="performanceStats">
+                                <div><strong>Performance Stats:</strong></div>
+                                <div>Processing Time: --</div>
+                                <div>Frame Size: --</div>
+                                <div>Status: Initializing...</div>
                             </div>
                         </div>
                         
-                        <div class="performance-stats" id="performanceStats">
-                            <div><strong>Performance Stats:</strong></div>
-                            <div>Processing Time: --</div>
-                            <div>Frame Size: --</div>
-                            <div>Status: Initializing...</div>
+                        <div class="detection-stats-panel">
+                            <div class="detection-stats-header">
+                                <span>📊 Detection Results</span>
+                                <button onclick="copyDetectionData()" style="padding: 4px 8px; font-size: 11px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">📋 Copy All</button>
+                            </div>
+                            <div class="detection-counts" id="detectionCounts">
+                                <span class="count-item"><strong>Detection:</strong> <span id="detectionCount">0</span></span>
+                                <span class="count-item"><strong>AI:</strong> <span id="aiCount">0</span></span>
+                                <span class="count-item"><strong>Combined:</strong> <span id="combinedCount">0</span></span>
+                                <span class="count-item"><strong>Avg Conf:</strong> <span id="avgConfidence">--</span></span>
+                            </div>
+                            <div class="detection-columns" id="detectionColumns">
+                                <div class="detection-column">
+                                    <div class="column-header detection-header">DETECTION</div>
+                                    <div class="column-content" id="detectionList">Loading...</div>
+                                </div>
+                                <div class="detection-column">
+                                    <div class="column-header ai-header">AI</div>
+                                    <div class="column-content" id="aiList">Loading...</div>
+                                </div>
+                                <div class="detection-column">
+                                    <div class="column-header combined-header">DETECTION+AI</div>
+                                    <div class="column-content" id="combinedList">Loading...</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    
-                    <div class="terminal" id="terminal">
-Detected Objects:
-- Loading...
-
-AI Identified:
-- Initializing...
-                    </div>
-                    
+                </div>
+                
+                <div class="bottom-row">
                     <div class="descriptions-section">
                         <div class="descriptions-header">🤖 AI Scene Description</div>
                         <div class="ai-description" id="aiDescription">
@@ -984,15 +1040,39 @@ AI Identified:
                     });
             }
             
+            function copyDetectionData() {
+                const detection = document.getElementById('detectionList').textContent;
+                const ai = document.getElementById('aiList').textContent;
+                const combined = document.getElementById('combinedList').textContent;
+                const counts = `Detection: ${document.getElementById('detectionCount').textContent}, AI: ${document.getElementById('aiCount').textContent}, Combined: ${document.getElementById('combinedCount').textContent}, Avg Confidence: ${document.getElementById('avgConfidence').textContent}`;
+                
+                const fullText = `=== DETECTION RESULTS ===\n${counts}\n\n--- DETECTION ---\n${detection}\n\n--- AI ---\n${ai}\n\n--- DETECTION+AI ---\n${combined}`;
+                
+                navigator.clipboard.writeText(fullText).then(() => {
+                    alert('Detection data copied to clipboard!');
+                }).catch(err => {
+                    console.error('Failed to copy:', err);
+                });
+            }
+            
             // Auto-refresh terminal and status every 2 seconds
             setInterval(() => {
                 fetch('/get_terminal_data')
                     .then(response => response.json())
                     .then(data => {
-                        document.getElementById('terminal').textContent = data.terminal;
+                        // Update counts
+                        document.getElementById('detectionCount').textContent = data.detection_count || 0;
+                        document.getElementById('aiCount').textContent = data.ai_count || 0;
+                        document.getElementById('combinedCount').textContent = data.combined_count || 0;
+                        document.getElementById('avgConfidence').textContent = data.avg_confidence || '--';
+                        
+                        // Update lists
+                        document.getElementById('detectionList').innerHTML = data.detection_objects ? data.detection_objects.map(obj => `<div>${obj}</div>`).join('') : 'No detections';
+                        document.getElementById('aiList').innerHTML = data.ai_objects ? data.ai_objects.map(obj => `<div>${obj}</div>`).join('') : 'No AI objects';
+                        document.getElementById('combinedList').innerHTML = data.correlated_objects ? data.correlated_objects.map(obj => `<div>${obj}</div>`).join('') : 'No combined results';
                     })
                     .catch(() => {
-                        document.getElementById('terminal').textContent = 'Error loading terminal data...';
+                        document.getElementById('detectionList').textContent = 'Error loading...';
                     });
                 
                 // Update AI description
@@ -1133,25 +1213,25 @@ def get_terminal_data():
         get_terminal_data.ai_objects = []
     if not hasattr(get_terminal_data, 'correlated_objects'):
         get_terminal_data.correlated_objects = []
+    if not hasattr(get_terminal_data, 'detection_count'):
+        get_terminal_data.detection_count = 0
+    if not hasattr(get_terminal_data, 'ai_count'):
+        get_terminal_data.ai_count = 0
+    if not hasattr(get_terminal_data, 'combined_count'):
+        get_terminal_data.combined_count = 0
+    if not hasattr(get_terminal_data, 'avg_confidence'):
+        get_terminal_data.avg_confidence = '--'
 
-    # Create three-column display with better formatting
-    lines = ["Detection".ljust(22) + "AI".ljust(16) + "Detection+AI"]
-
-    max_items = 8
-    for i in range(max_items):
-        detection = (get_terminal_data.detection_objects[i] if i < len(get_terminal_data.detection_objects) else "").ljust(22)
-        ai = (get_terminal_data.ai_objects[i] if i < len(get_terminal_data.ai_objects) else "").ljust(16)
-        correlated = get_terminal_data.correlated_objects[i] if i < len(get_terminal_data.correlated_objects) else ""
-
-        # Truncate correlated if too long
-        if len(correlated) > 30:
-            correlated = correlated[:27] + "..."
-
-        line = f"{detection}{ai}{correlated}"
-        lines.append(line)
-
-    terminal_text = "\n".join(lines)
-    return {'terminal': terminal_text}
+    # Return structured data for copyable display
+    return {
+        'detection_objects': get_terminal_data.detection_objects,
+        'ai_objects': get_terminal_data.ai_objects,
+        'correlated_objects': get_terminal_data.correlated_objects,
+        'detection_count': get_terminal_data.detection_count,
+        'ai_count': get_terminal_data.ai_count,
+        'combined_count': get_terminal_data.combined_count,
+        'avg_confidence': get_terminal_data.avg_confidence
+    }
 
 @app.route('/get_system_stats')
 def get_system_stats():
