@@ -135,3 +135,32 @@ dmypy.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Living Portrait System - Generated/Runtime Files
+vision_experiment/memory/
+vision_experiment/sprites/*.png
+vision_experiment/sprites/*.jpg
+*.log
+logs/
+memory/interactions.json
+memory/people.json
+memory/settings.json
+
+# YOLO Model Files (download as needed)
+*.pt
+*.pth
+yolov8*.pt
+yolov8n.pt
+yolov8s.pt
+yolov8m.pt
+yolov8l.pt
+yolov8x.pt
+
+# OpenCV Haarcascades (already in opencv installation)
+haarcascade_*.xml
+
+# Temporary files
+*.tmp
+*.temp
+.pytest_cache/
+*.pyc

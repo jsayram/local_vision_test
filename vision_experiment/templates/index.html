@@ -3,195 +3,122 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Vision Analysis</title>
+    <title>Living Portrait</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .video-container {
+            aspect-ratio: 4/3;
+            background: #000;
+        }
+        .subtitle-box {
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+        }
+        .reference-section {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
 </head>
-<body class="bg-gray-100 min-h-screen p-2 md:p-4 font-sans">
-    <!-- Main Container - Scrollable on mobile, fixed on desktop -->
-    <div class="min-h-full lg:h-screen lg:max-h-screen flex flex-col gap-2 md:gap-3 lg:overflow-hidden">
-        
-        <!-- Header -->
-        <header class="flex-shrink-0 text-center">
-            <h1 class="text-xl md:text-2xl font-bold text-gray-800">🤖 AI Vision Analysis System</h1>
-        </header>
-        
-        <!-- Controls Section -->
-        <section class="flex-shrink-0 bg-white rounded-lg shadow p-3 md:p-4">
-            <div class="flex flex-col gap-3">
-                <!-- Control Groups Row -->
-                <div class="flex flex-col lg:flex-row gap-3 lg:gap-6 lg:items-end lg:flex-wrap">
-                    
-                    <!-- Detection Model -->
-                    <div class="flex flex-col gap-1 lg:flex-row lg:items-center lg:gap-2">
-                        <label for="detectionModel" class="font-semibold text-sm text-gray-700 whitespace-nowrap">🔧 Detection Model:</label>
-                        <select id="detectionModel" onchange="changeDetectionModel()" 
-                                class="w-full lg:w-auto px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition">
-                            <option value="yolov8">YOLOv8 AI (Most Capable)</option>
-                            <option value="opencv">OpenCV (Lightweight)</option>
-                        </select>
-                    </div>
-                    
-                    <!-- Detection Mode -->
-                    <div class="flex flex-col gap-1 lg:flex-row lg:items-center lg:gap-2">
-                        <label for="detectionMode" class="font-semibold text-sm text-gray-700 whitespace-nowrap">🎯 Detection Mode:</label>
-                        <select id="detectionMode" onchange="changeDetectionMode()"
-                                class="w-full lg:w-auto px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition">
-                            <option value="all_detection">All Detection</option>
-                            <option value="face_features">Face Features Only</option>
-                            <option value="people">People Detection Only</option>
-                            <option value="general_objects">General Objects Only</option>
-                            <option value="none">No Detection</option>
-                        </select>
-                    </div>
+<body class="text-white">
+    <!-- Header -->
+    <div class="container mx-auto px-4 py-6">
+        <div class="flex items-center justify-between flex-wrap gap-4">
+            <div>
+                <h1 class="text-4xl font-bold">Living Portrait</h1>
+                <p class="text-purple-200 mt-1">An AI-powered interactive portrait</p>
+            </div>
+            <div class="flex items-center gap-4">
+                <span id="platform-indicator" class="px-3 py-1 bg-purple-900 rounded-full text-sm">
+                    Loading...
+                </span>
+                <button id="pause-btn" class="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 rounded-lg font-medium text-gray-900 transition">
+                    Pause
+                </button>
+                <button id="refresh-btn" class="px-4 py-2 bg-blue-500 hover:bg-blue-600 rounded-lg font-medium transition">
+                    Refresh
+                </button>
+                <button id="stop-btn" class="px-4 py-2 bg-red-500 hover:bg-red-600 rounded-lg font-medium transition">
+                    Stop
+                </button>
+            </div>
+        </div>
+    </div>
 
-                    <!-- Processing Rate -->
-                    <div class="flex flex-col gap-1">
-                        <label for="processingFps" class="font-semibold text-sm text-gray-700 whitespace-nowrap">⚡ Processing Rate:</label>
-                        <div class="flex flex-wrap gap-2 items-center">
-                            <select id="processingFpsSelect" onchange="changeProcessingFps()"
-                                    class="flex-1 min-w-[120px] px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition">
-                                <optgroup label="Fast Processing">
-                                    <option value="15 FPS">15 FPS (fast)</option>
-                                    <option value="1 FPS">1 FPS (normal)</option>
-                                </optgroup>
-                                <optgroup label="Slow Intervals">
-                                    <option value="0.5 FPS">Every 2 seconds</option>
-                                    <option value="0.2 FPS">Every 5 seconds</option>
-                                    <option value="0.1 FPS">Every 10 seconds</option>
-                                    <option value="0.033 FPS">Every 30 seconds</option>
-                                    <option value="0.017 FPS">Every 60 seconds</option>
-                                </optgroup>
-                            </select>
-                            <input type="text" id="processingFpsInput" placeholder="Custom FPS"
-                                   onkeypress="handleFpsInputKeyPress(event)"
-                                   class="w-24 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition">
-                            <button onclick="applyCustomFps()" 
-                                    class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 transition">
-                                Apply
-                            </button>
-                        </div>
-                        <div class="flex items-center gap-3 text-xs">
-                            <span class="text-gray-500">Current: <span id="currentFpsDisplay">1 FPS</span></span>
-                            <span id="countdownDisplay" class="font-mono font-bold text-orange-600 bg-orange-100 px-2 py-0.5 rounded">⏱️ Next: --s</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Action Buttons -->
-                <div class="flex flex-wrap gap-2">
-                    <button id="overlayBtn" onclick="toggleOverlay()" 
-                            class="flex-1 lg:flex-none px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 transition">
-                        🎨 AI Overlay: ON
-                    </button>
-                    <button id="pauseBtn" onclick="togglePause()" 
-                            class="flex-1 lg:flex-none px-4 py-2 bg-yellow-500 text-gray-900 text-sm font-medium rounded-md hover:bg-yellow-600 focus:ring-2 focus:ring-yellow-500 transition">
-                        ⏸️ Pause
-                    </button>
-                    <button onclick="stopServer()" 
-                            class="flex-1 lg:flex-none px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 focus:ring-2 focus:ring-red-500 transition">
-                        Stop Server
-                    </button>
-                    <button onclick="refreshPage()" 
-                            class="flex-1 lg:flex-none px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-md hover:bg-green-700 focus:ring-2 focus:ring-green-500 transition">
-                        Refresh
-                    </button>
+    <!-- Main Content -->
+    <div class="container mx-auto px-4">
+        <!-- Side-by-side Video Feeds -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <!-- Camera Feed -->
+            <div class="bg-white bg-opacity-10 rounded-xl p-4 backdrop-blur-lg">
+                <h2 class="text-xl font-semibold mb-3">Camera Feed</h2>
+                <div class="video-container rounded-lg overflow-hidden">
+                    <img id="camera-feed" src="/video_feed" class="w-full h-full object-contain">
                 </div>
             </div>
-        </section>
-        
-        <!-- Main Content Area -->
-        <main class="flex-1 flex flex-col gap-2 md:gap-3 min-h-0 lg:overflow-hidden">
-            
-            <!-- Three-Column Layout (stacks on mobile) -->
-            <div class="flex flex-col lg:flex-row gap-2 md:gap-3 lg:flex-1 lg:min-h-0 lg:overflow-hidden">
-                
-                <!-- Left Column: Detection Results -->
-                <div class="order-2 lg:order-1 lg:flex-[0_0_22%] lg:min-w-[200px] lg:max-w-[35%] bg-slate-900 rounded-lg p-3 lg:overflow-auto resizable">
-                    <!-- Header -->
-                    <div class="flex justify-between items-center mb-2 pb-2 border-b-2 border-green-500">
-                        <span class="text-green-500 font-bold text-sm md:text-base">📊 Detection Results</span>
-                        <button onclick="copyDetectionData()" 
-                                class="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition">
-                            📋 Copy
-                        </button>
-                    </div>
-                    
-                    <!-- Counts -->
-                    <div id="detectionCounts" class="flex flex-wrap gap-x-4 gap-y-1 mb-3 p-2 bg-slate-950 rounded text-xs font-mono text-white">
-                        <span><strong>Detection:</strong> <span id="detectionCount" class="text-green-400">0</span></span>
-                        <span><strong>AI:</strong> <span id="aiCount" class="text-green-400">0</span></span>
-                        <span><strong>Combined:</strong> <span id="combinedCount" class="text-green-400">0</span></span>
-                        <span><strong>Avg Conf:</strong> <span id="avgConfidence" class="text-green-400">--</span></span>
-                    </div>
-                    
-                    <!-- Detection Columns - Horizontal on mobile for compact view -->
-                    <div id="detectionColumns" class="grid grid-cols-3 gap-1 lg:flex lg:flex-col lg:gap-2">
-                        <div class="flex flex-col min-w-0">
-                            <div class="bg-green-600 text-white text-center text-[10px] lg:text-xs font-bold py-1 rounded-t">DETECTION</div>
-                            <div id="detectionList" class="bg-slate-950 p-1 lg:p-2 rounded-b text-[10px] lg:text-xs font-mono text-white max-h-24 lg:max-h-32 overflow-y-auto break-words dark-scrollbar">Loading...</div>
-                        </div>
-                        <div class="flex flex-col min-w-0">
-                            <div class="bg-yellow-500 text-gray-900 text-center text-[10px] lg:text-xs font-bold py-1 rounded-t">AI</div>
-                            <div id="aiList" class="bg-slate-950 p-1 lg:p-2 rounded-b text-[10px] lg:text-xs font-mono text-white max-h-24 lg:max-h-32 overflow-y-auto break-words dark-scrollbar">Loading...</div>
-                        </div>
-                        <div class="flex flex-col min-w-0">
-                            <div class="bg-teal-600 text-white text-center text-[10px] lg:text-xs font-bold py-1 rounded-t">COMBINED</div>
-                            <div id="combinedList" class="bg-slate-950 p-1 lg:p-2 rounded-b text-[10px] lg:text-xs font-mono text-white max-h-24 lg:max-h-32 overflow-y-auto break-words dark-scrollbar">Loading...</div>
-                        </div>
-                    </div>
-                </div>
 
-                <!-- Middle Column: Video Feed -->
-                <div class="order-1 lg:order-2 lg:flex-[1_1_50%] lg:min-w-[300px] aspect-video lg:aspect-auto bg-black rounded-lg overflow-hidden resizable">
-                    <img src="/video_feed" alt="Live Video Feed" class="w-full h-full object-contain">
+            <!-- Portrait Animation -->
+            <div class="bg-white bg-opacity-10 rounded-xl p-4 backdrop-blur-lg">
+                <h2 class="text-xl font-semibold mb-3">Portrait Animation</h2>
+                <div class="video-container rounded-lg overflow-hidden">
+                    <img id="animation-feed" src="/animation_feed" class="w-full h-full object-contain">
                 </div>
+            </div>
+        </div>
 
-                <!-- Right Column: System Stats -->
-                <div class="order-3 lg:flex-[0_0_22%] lg:min-w-[200px] lg:max-w-[30%] bg-white rounded-lg shadow p-3 flex flex-col gap-2 lg:overflow-auto resizable">
-                    
-                    <!-- Status Banner -->
-                    <div id="statusBanner" class="bg-red-600 text-white text-center font-bold py-2 px-3 rounded-lg text-sm">
-                        🔴 Active Model: YOLOV8
+        <!-- Portrait Says (Subtitle) -->
+        <div class="bg-white bg-opacity-10 rounded-xl p-6 backdrop-blur-lg mb-6">
+            <h2 class="text-2xl font-semibold mb-3 flex items-center">
+                <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path>
+                </svg>
+                Portrait Says
+            </h2>
+            <div class="subtitle-box rounded-lg p-4">
+                <p id="portrait-subtitle" class="text-lg leading-relaxed">
+                    Waiting for someone to appear...
+                </p>
+            </div>
+        </div>
+
+        <!-- Reference Sections -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <!-- YOLO Detection Results -->
+            <div class="reference-section rounded-xl p-4">
+                <h3 class="text-lg font-semibold mb-3 text-purple-200">YOLO Detection Results</h3>
+                <div class="space-y-2">
+                    <div class="text-sm">
+                        <span class="text-purple-300">Count:</span>
+                        <span id="detection-count" class="ml-2 font-mono">0</span>
                     </div>
-                    
-                    <!-- System Resources - Horizontal on mobile -->
-                    <div class="bg-gray-50 rounded-lg p-2 lg:p-3">
-                        <div class="font-bold text-sm text-gray-800 border-b-2 border-green-500 pb-1 mb-2">💻 System Resources</div>
-                        <div class="grid grid-cols-3 lg:grid-cols-1 gap-2 font-mono text-xs">
-                            <div class="bg-white p-2 rounded border-l-2 border-green-500 text-center">
-                                <span class="block text-gray-600 font-bold text-[10px] lg:text-xs">CPU</span>
-                                <span id="cpuUsage" class="text-blue-600 font-bold text-sm">--%</span>
-                            </div>
-                            <div class="bg-white p-2 rounded border-l-2 border-green-500 text-center">
-                                <span class="block text-gray-600 font-bold text-[10px] lg:text-xs">RAM</span>
-                                <span id="ramUsage" class="text-blue-600 font-bold text-sm">--%</span>
-                            </div>
-                            <div class="bg-white p-2 rounded border-l-2 border-green-500 text-center">
-                                <span class="block text-gray-600 font-bold text-[10px] lg:text-xs">GPU</span>
-                                <span id="gpuUsage" class="text-blue-600 font-bold text-sm">--%</span>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- Performance Stats -->
-                    <div id="performanceStats" class="bg-gray-50 rounded-lg p-2 lg:p-3 font-mono text-xs text-gray-700">
-                        <div class="font-bold mb-1">Performance Stats:</div>
-                        <div>Processing Time: --</div>
-                        <div>Frame Size: --</div>
-                        <div>Status: Initializing...</div>
+                    <div class="max-h-32 overflow-y-auto">
+                        <ul id="detection-list" class="text-sm space-y-1 text-gray-300">
+                            <li>No detections yet</li>
+                        </ul>
                     </div>
                 </div>
             </div>
 
-            <!-- Bottom Row: AI Description -->
-            <section class="flex-shrink-0 bg-white rounded-lg shadow p-3 md:p-4 flex flex-col">
-                <h2 class="font-bold text-base md:text-lg text-gray-800 border-b-2 border-blue-500 pb-2 mb-2 flex-shrink-0">🤖 AI Scene Description</h2>
-                <div id="aiDescription" class="bg-gray-50 p-3 md:p-4 rounded border-l-4 border-blue-500 text-sm md:text-base text-gray-700 leading-relaxed max-h-32 lg:max-h-48 overflow-y-auto whitespace-pre-line break-words">
-                    Initializing AI vision analysis... Please wait for the first description to load.
+            <!-- AI Description -->
+            <div class="reference-section rounded-xl p-4">
+                <h3 class="text-lg font-semibold mb-3 text-purple-200">AI Description (Moondream)</h3>
+                <div class="text-sm">
+                    <p id="ai-description" class="text-gray-300 leading-relaxed">
+                        Waiting for AI analysis...
+                    </p>
                 </div>
-            </section>
-        </main>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="container mx-auto px-4 py-6 text-center text-purple-200 text-sm">
+        <p>Living Portrait System • Event-Driven Architecture • Real-time AI Vision</p>
     </div>
 
     <script src="/static/js/app.js"></script>
