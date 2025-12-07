@@ -9,6 +9,20 @@ import signal
 import atexit
 from flask import Flask, Response, render_template, send_from_directory
 from detection_manager import DetectionManager
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+
+try:
+    import sklearn.metrics.pairwise as pairwise
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+
+import numpy as np
+from collections import defaultdict, deque
 
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -39,64 +53,161 @@ detection_mode = "all_detection"  # Options: "all_detection", "face_features", "
 # Processing FPS control
 processing_fps = "1 FPS"  # Options: "1 FPS", "15 FPS", "1 FP 2 seconds", "1 FP 5 seconds", etc. or custom
 
+class AdaptiveConfidenceScorer:
+    """Adaptive confidence scoring system that learns from historical correlations"""
+    def __init__(self):
+        self.match_history = defaultdict(list)  # Track historical correlations
+        self.semantic_model = None
+        
+    def initialize_model(self):
+        """Lazy initialization of semantic model"""
+        if self.semantic_model is None and SENTENCE_TRANSFORMERS_AVAILABLE:
+            try:
+                self.semantic_model = SentenceTransformer('all-MiniLM-L6-v2')
+            except Exception as e:
+                print(f"Warning: Could not load semantic model: {e}")
+                self.semantic_model = None
+    
+    def score_correlation(self, ai_obj, det_obj, match_type, semantic_sim=None):
+        """Calculate adaptive confidence score based on historical performance"""
+        key = (ai_obj.lower(), det_obj.lower())
+        
+        # Record this correlation
+        confidence_score = 1.0 if match_type == "ai_detection_match" else 0.5
+        self.match_history[key].append(confidence_score)
+        
+        # Keep only last 20 correlations for each pair
+        if len(self.match_history[key]) > 20:
+            self.match_history[key] = self.match_history[key][-20:]
+        
+        # Calculate historical average
+        historical_avg = sum(self.match_history[key]) / len(self.match_history[key])
+        
+        # Incorporate semantic similarity if available
+        if semantic_sim is not None:
+            # Blend historical and semantic scores
+            combined_score = (historical_avg * 0.7) + (semantic_sim * 0.3)
+        else:
+            combined_score = historical_avg
+            
+        return combined_score
+
+# Global adaptive scorer instance
+adaptive_scorer = AdaptiveConfidenceScorer()
+
+def cosine_similarity_manual(a, b):
+    """Cosine similarity calculation using sklearn if available, otherwise manual"""
+    if SKLEARN_AVAILABLE:
+        return pairwise.cosine_similarity(a, b)
+    else:
+        # Manual calculation
+        a = np.array(a)
+        b = np.array(b)
+        if a.ndim == 1:
+            a = a.reshape(1, -1)
+        if b.ndim == 1:
+            b = b.reshape(1, -1)
+        dot_product = np.dot(a, b.T)
+        norm_a = np.linalg.norm(a, axis=1)
+        norm_b = np.linalg.norm(b, axis=1)
+        return dot_product / (norm_a[:, np.newaxis] * norm_b)
+
+def extract_keywords_enhanced(description):
+    """Enhanced keyword extraction from AI description"""
+    # Basic keywords (expanded)
+    base_keywords = [
+        'man', 'woman', 'person', 'human', 'people', 'child', 'adult', 'boy', 'girl',
+        'couch', 'sofa', 'chair', 'table', 'desk', 'lamp', 'light', 'vase', 'flowers', 'plant', 'tree',
+        'window', 'wall', 'door', 'ceiling', 'floor', 'carpet', 'rug', 'curtains', 'blinds',
+        'shirt', 'sweater', 'jacket', 'pants', 'jeans', 'dress', 'skirt', 'hat', 'cap', 'glasses', 'watch',
+        'headphones', 'earbuds', 'bed', 'pillow', 'blanket', 'mirror', 'picture', 'frame',
+        'book', 'phone', 'cellphone', 'computer', 'laptop', 'screen', 'monitor', 'keyboard', 'mouse',
+        'bottle', 'glass', 'cup', 'plate', 'bowl', 'food', 'fruit', 'apple', 'banana', 'vegetable',
+        'bag', 'backpack', 'purse', 'shoes', 'sneakers', 'boots', 'hand', 'arm', 'leg', 'foot',
+        'potted plant', 'television', 'tv', 'remote', 'clock', 'fan', 'heater', 'air conditioner',
+        'car', 'vehicle', 'bicycle', 'motorcycle', 'truck', 'bus', 'train',
+        'dog', 'cat', 'animal', 'bird', 'fish', 'horse', 'cow'
+    ]
+    
+    # Find matching keywords
+    found_keywords = []
+    description_lower = description.lower()
+    for keyword in base_keywords:
+        if keyword in description_lower:
+            found_keywords.append(keyword.title())
+    
+    # Remove duplicates
+    return list(set(found_keywords))
+
 def correlate_ai_detection(ai_description, detections):
     """
-    Correlate AI description with detection results to create combined confidence scores
-    Returns: list of tuples (object_name, combined_confidence, source)
+    Strict correlation: only return objects where both AI and detection agree
+    Returns: list of tuples (object_name, high_confidence, source) - only confirmed matches
     """
-    import re
-    from difflib import SequenceMatcher
+    if not ai_description or not detections:
+        return []
     
-    # Extract keywords from AI description
-    keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant', 
-                'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door', 
-                'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse', 
-                'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch', 
-                'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot', 'potted plant']
-    
-    # Find AI-identified objects
-    ai_objects = []
-    description_lower = ai_description.lower()
-    for keyword in keywords:
-        if keyword.lower() in description_lower:
-            ai_objects.append(keyword.title())
-    
-    # Remove duplicates and clean
-    ai_objects = list(set(ai_objects))
-    
-    # Create correlation results
     correlated_results = []
     
-    # Process detected objects
+    # Extract keywords from AI description
+    ai_keywords = extract_keywords_enhanced(ai_description)
+    
+    # Define synonym mappings for better matching - normalize to canonical form
+    # Key = canonical form, Value = list of synonyms that map to the canonical form
+    synonyms = {
+        'person': ['man', 'woman', 'human', 'people', 'boy', 'girl', 'child', 'adult', 'guy', 'lady', 'male', 'female', 'individual'],
+        'car': ['vehicle', 'auto', 'automobile', 'sedan', 'suv'],
+        'chair': ['seat', 'stool', 'armchair'],
+        'table': ['desk', 'counter', 'surface'],
+        'couch': ['sofa', 'loveseat', 'settee'],
+        'phone': ['cellphone', 'mobile', 'smartphone', 'iphone', 'android'],
+        'computer': ['laptop', 'pc', 'desktop', 'macbook', 'notebook'],
+        'bottle': ['container', 'flask', 'jug'],
+        'cup': ['glass', 'mug', 'tumbler'],
+        'book': ['novel', 'textbook', 'magazine', 'journal'],
+        'dog': ['puppy', 'canine', 'pup'],
+        'cat': ['kitten', 'feline', 'kitty'],
+        'tv': ['television', 'monitor', 'screen', 'display'],
+        'bed': ['mattress', 'cot'],
+        'potted plant': ['houseplant', 'plant', 'flower pot'],
+    }
+    
+    # Create reverse mapping - maps any term to its canonical form
+    synonym_map = {}
+    for canonical, variants in synonyms.items():
+        synonym_map[canonical] = canonical  # canonical maps to itself
+        for variant in variants:
+            synonym_map[variant.lower()] = canonical
+    
+    # Process detected objects - only keep those that AI also mentions
     for det in detections:
         obj_name = det['label'].lower()
         det_conf = det['confidence']
         
-        # Find best AI match using fuzzy matching
+        # Get canonical form for the detected object
+        canonical_obj = synonym_map.get(obj_name, obj_name)
+        
+        # Check if AI mentions this object (exact or synonym match)
+        ai_agrees = False
         best_match = None
-        best_ratio = 0
         
-        for ai_obj in ai_objects:
-            ai_obj_lower = ai_obj.lower()
-            ratio = SequenceMatcher(None, obj_name, ai_obj_lower).ratio()
-            if ratio > best_ratio and ratio > 0.6:  # 60% similarity threshold
-                best_match = ai_obj
-                best_ratio = ratio
+        for keyword in ai_keywords:
+            keyword_lower = keyword.lower()
+            # Get canonical form for the AI keyword
+            canonical_keyword = synonym_map.get(keyword_lower, keyword_lower)
+            
+            # Match if canonical forms are the same
+            if canonical_obj == canonical_keyword:
+                ai_agrees = True
+                best_match = keyword
+                break
         
-        if best_match:
-            # Both AI and detection agree - high confidence
-            combined_conf = max(det_conf, 0.85)  # Boost to at least 0.85
-            correlated_results.append((det['label'].title(), combined_conf, "AI + Detection"))
-            # Remove from AI objects to avoid double counting
-            ai_objects.remove(best_match)
-        else:
-            # Only detection found it - slight penalty
-            combined_conf = det_conf * 0.9
-            correlated_results.append((det['label'].title(), combined_conf, "Detection Only"))
-    
-    # Add remaining AI-only objects
-    for ai_obj in ai_objects:
-        correlated_results.append((ai_obj, 0.6, "AI Only"))
+        if ai_agrees:
+            # Both AI and detection agree - very high confidence
+            # Use the CANONICAL form for the output (normalized)
+            display_name = canonical_obj.title()
+            combined_conf = max(det_conf, 0.95)  # Minimum 95% confidence for confirmed matches
+            correlated_results.append((display_name, combined_conf, "AI + Detection Confirmed"))
     
     # Sort by confidence (highest first)
     correlated_results.sort(key=lambda x: x[1], reverse=True)
@@ -171,7 +282,7 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-def process_frame(frame, timestamp):
+def process_frame(frame, timestamp, detections=None):
     global current_description, current_processing_time, current_frame_size
     start_time = time.time()
     
@@ -182,13 +293,21 @@ def process_frame(frame, timestamp):
     _, buffer = cv2.imencode('.jpg', frame)
     img_base64 = base64.b64encode(buffer).decode('utf-8')
     
+    # Build enhanced prompt with detection context
+    base_prompt = "Describe what you see in this image briefly."
+    
+    if detections:
+        # Include detection results for better AI alignment
+        detection_summary = ", ".join([f"{det['label']} ({det['confidence']:.2f})" for det in detections[:5]])  # Top 5 detections
+        base_prompt += f" I can see these objects: {detection_summary}. Please focus on describing these and any other objects you notice."
+    
     # Send to Ollama
     try:
         response = requests.post(
             "http://localhost:11434/api/generate",
             json={
                 "model": "moondream",
-                "prompt": "Describe what you see in this image briefly.",
+                "prompt": base_prompt,
                 "images": [img_base64],
                 "stream": False
             },
@@ -306,9 +425,11 @@ def generate_frames():
                 break
 
             if cap is None or not cap.isOpened():
-                break
+                # Camera not available - wait and retry
+                time.sleep(0.5)
+                continue
 
-            # If paused, keep yielding the last frame
+            # If paused, keep yielding the last frame and skip all processing
             if paused and last_frame is not None:
                 ret, buffer = cv2.imencode('.jpg', last_frame)
                 frame_bytes = buffer.tobytes()
@@ -319,30 +440,20 @@ def generate_frames():
 
             ret, frame = cap.read()
             if not ret:
-                break
+                # Frame read failed - wait briefly and retry
+                time.sleep(0.1)
+                continue
 
             if not server_running:  # Check again before processing
                 break
 
             # Update interval based on current FPS setting
             interval = parse_fps_string(processing_fps)
-            if not server_running:  # Check again before reading frame
-                break
-
-            if cap is None or not cap.isOpened():
-                break
-
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            if not server_running:  # Check again before processing
-                break
 
             # Keep a clean copy for AI processing (before overlays)
             clean_frame = frame.copy()
 
-            # Only apply detection and overlays if show_overlay is True
+            # Apply detection and overlays if show_overlay is True
             if show_overlay:
                 # Apply detection using DetectionManager
                 detections = detection_manager.detect_objects(frame, detection_model, detection_mode)
@@ -363,17 +474,12 @@ def generate_frames():
             # Get AI objects
             ai_objects = []
             if current_description:
-                keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant',
-                           'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door',
-                           'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse',
-                           'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch',
-                           'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot', 'potted plant']
-                description_lower = current_description.lower()
-                ai_objects = [word.title() for word in keywords if word.lower() in description_lower]
+                ai_keywords = extract_keywords_enhanced(current_description)
+                ai_objects = [keyword.title() for keyword in ai_keywords]
                 ai_objects = list(set(ai_objects))  # Remove duplicates
 
-            # Get correlated results
-            correlated_results = correlate_ai_detection(current_description, detections) if (detections or ai_objects) else []
+            # Get correlated results - only confirmed matches where AI and detection agree
+            correlated_results = correlate_ai_detection(current_description, detections) if (detections and current_description) else []
 
             # Store data for web UI endpoint (always available, even when overlay is off)
             get_terminal_data.detection_objects = detection_objects
@@ -386,7 +492,7 @@ def generate_frames():
                 get_terminal_data.avg_confidence = f"{avg_conf:.0%}"
                 get_terminal_data.detection_count = len(detection_objects)
                 get_terminal_data.ai_count = len(ai_objects)
-                get_terminal_data.combined_count = len(correlated_results)
+                get_terminal_data.combined_count = len(correlated_results)  # Now represents confirmed matches
             else:
                 get_terminal_data.avg_confidence = "--"
                 get_terminal_data.detection_count = len(detection_objects)
@@ -413,8 +519,9 @@ def generate_frames():
                 last_capture = current_time
                 # Start processing thread - use clean_frame without overlays
                 frame_to_process = clean_frame.copy()
+                detections_for_ai = detections.copy() if detections else []  # Capture detections for AI
                 def process_and_reset():
-                    process_frame(frame_to_process, current_time)
+                    process_frame(frame_to_process, current_time, detections_for_ai)
                     global processing
                     processing = False
                 thread = threading.Thread(target=process_and_reset)
@@ -424,13 +531,15 @@ def generate_frames():
             if not server_running:  # Check before sleep
                 break
 
-            time.sleep(0.1)  # Small delay to prevent overwhelming the stream
+            time.sleep(0.033)  # ~30fps max for smooth video
 
-    finally:
-        # Cleanup when server stops or generator is interrupted
-        if cap is not None and cap.isOpened():
-            cap.release()
-            print("Camera released due to server stop or interruption")
+    except GeneratorExit:
+        # Normal generator cleanup when client disconnects - don't release camera
+        pass
+    except Exception as e:
+        print(f"Error in generate_frames: {e}")
+    # Note: Camera is NOT released here - it stays open for reconnections
+    # Camera is only released on server shutdown via cleanup_camera()
 
 @app.route('/')
 def index():

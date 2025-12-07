@@ -75,11 +75,9 @@ class YOLODetector:
                             'color': (0, 255, 255)  # Yellow
                         })
 
-            # Debug output
-            if len(detections) > 0:
+            # Only log when detections found (reduce spam)
+            if detections:
                 print(f"YOLO detected {len(detections)} objects: {[d['label'] for d in detections]}")
-            else:
-                print("YOLO: No objects detected above confidence threshold")
 
             return detections
         except Exception as e:

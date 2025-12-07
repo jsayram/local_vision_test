@@ -11,3 +11,7 @@ torchvision>=0.15.0
 tensorflow>=2.13.0
 tf-models-official>=2.13.0
 tensorflow-hub>=0.15.0
+
+# Enhanced AI-Detection Correlation
+sentence-transformers>=2.2.0
+scikit-learn>=1.3.0

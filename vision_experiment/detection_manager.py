@@ -1,4 +1,5 @@
 import cv2
+import threading
 
 # Import the separate detector classes
 from yolo_detector import YOLODetector
@@ -10,6 +11,7 @@ class DetectionManager:
         self.yolo_detector = None
         self.tf_detector = None
         self.opencv_detector = None
+        self._lock = threading.Lock()  # Thread safety for model switching
         self.initialize_detectors()
 
     def initialize_detectors(self):
@@ -30,15 +32,19 @@ class DetectionManager:
         """
         detections = []
 
-        if model == "yolov8" and self.yolo_detector and self.yolo_detector.detector:
-            detections = self.yolo_detector.detect(frame, mode)
-        elif model == "tensorflow":
-            if self.tf_detector and self.tf_detector.is_available():
-                detections = self.tf_detector.detect(frame, mode)
-            else:
-                print("⚠ TensorFlow not available - install with: pip install tensorflow tensorflow-hub")
-        elif model == "opencv" and self.opencv_detector:
-            detections = self.opencv_detector.detect(frame, mode)
+        # Use lock to prevent concurrent detection calls during model switch
+        with self._lock:
+            try:
+                if model == "yolov8" and self.yolo_detector and self.yolo_detector.detector:
+                    detections = self.yolo_detector.detect(frame, mode)
+                elif model == "tensorflow" and self.tf_detector:
+                    # detect() handles lazy init and returns empty list if unavailable
+                    detections = self.tf_detector.detect(frame, mode)
+                elif model == "opencv" and self.opencv_detector:
+                    detections = self.opencv_detector.detect(frame, mode)
+            except Exception as e:
+                print(f"Detection error: {e}")
+                detections = []
 
         return detections
 
