@@ -10,19 +10,6 @@ import atexit
 from flask import Flask, Response, render_template, send_from_directory
 from detection_manager import DetectionManager
 
-# Try to import advanced detection libraries (with fallbacks)
-try:
-    from ultralytics import YOLO
-    YOLO_AVAILABLE = True
-except ImportError:
-    YOLO_AVAILABLE = False
-    print("YOLOv8 not available - using OpenCV fallback")
-
-# TensorFlow import is deferred to avoid startup issues
-TF_AVAILABLE = False
-tf = None
-hub = None
-
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
