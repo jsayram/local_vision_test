@@ -53,8 +53,9 @@ detection_mode = "all_detection"  # Options: "all_detection", "face_features", "
 # Processing FPS control
 processing_fps = "1 FPS"  # Options: "1 FPS", "15 FPS", "1 FP 2 seconds", "1 FP 5 seconds", etc. or custom
 
-# Countdown tracking for UI
+# Countdown tracking for UI - initialized to 0, will be set on first detection
 last_detection_time_global = 0  # Track globally for API access
+cached_detections_global = []  # Cache detection results globally between intervals
 
 class AdaptiveConfidenceScorer:
     """Adaptive confidence scoring system that learns from historical correlations"""
@@ -420,9 +421,8 @@ def run_camera_mode():
 
 def generate_frames():
     global cap, processing, last_capture, interval, show_overlay, server_running, processing_fps, paused
+    global last_detection_time_global, cached_detections_global
     last_frame = None  # Store last frame for pause mode
-    cached_detections = []  # Cache detection results between intervals
-    last_detection_time = 0  # Track when we last ran detection
 
     try:
         while server_running:
@@ -455,23 +455,21 @@ def generate_frames():
             # Update interval based on current FPS setting
             interval = parse_fps_string(processing_fps)
 
-            # Check if it's time to run detection and AI processing
+            # Check if it's time to run detection and AI processing (use global tracker)
             current_time = time.time()
-            should_process = (current_time - last_detection_time) >= interval
+            should_process = (current_time - last_detection_time_global) >= interval
 
             # Keep a clean copy for AI processing (before overlays)
             clean_frame = frame.copy()
 
             # Only run detection at the specified interval rate
             if should_process and show_overlay:
-                global last_detection_time_global
                 # Apply detection using DetectionManager
-                cached_detections = detection_manager.detect_objects(frame, detection_model, detection_mode)
-                last_detection_time = current_time
-                last_detection_time_global = current_time  # Update global for API
+                cached_detections_global = detection_manager.detect_objects(frame, detection_model, detection_mode)
+                last_detection_time_global = current_time  # Update global tracker
             
             # Use cached detections for display
-            detections = cached_detections if show_overlay else []
+            detections = cached_detections_global if show_overlay else []
 
             # Draw detections on frame (using cached results)
             if show_overlay and detections:
