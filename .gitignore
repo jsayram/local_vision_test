@@ -164,3 +164,4 @@ haarcascade_*.xml
 *.temp
 .pytest_cache/
 *.pyc
+vision_experiment/core/memory/

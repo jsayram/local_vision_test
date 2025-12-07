@@ -18,6 +18,7 @@ import numpy as np
 from queue import Queue, Empty
 from collections import defaultdict, deque
 from typing import Optional, List
+from datetime import datetime
 from flask import Flask, Response, render_template, jsonify, send_from_directory
 
 # Import detection manager (original system)
@@ -284,29 +285,50 @@ def moondream_worker():
             event_type = job["event_type"]
             face_img = job["face_img"]
             person_id = job.get("person_id", "unknown")
-            last_interaction_text = job.get("last_interaction_text", None)
             
             print(f"[Moondream Worker] Processing {event_type.name} event for person {person_id}")
             
+            # Load recent interactions if person is known
+            recent_interactions = []
+            if person_id != "unknown" and person_id in people:
+                person_data = people[person_id]
+                recent_interactions = person_data.get("interactions", [])[-5:]  # Last 5
+            
             context = MoondreamContext(
-                event_type=event_type,
-                person_id=person_id,
-                last_interaction_text=last_interaction_text
+                event_type=event_type.name,
+                person_id=person_id if person_id != "unknown" else None,
+                recent_interactions=recent_interactions
             )
             
             result = moondream_client.call_moondream_on_face(face_img, context)
             
+            # Update animation state
             with animation_state_lock:
                 animation_state.mood = result.mood
                 animation_state.speaking = True
-                animation_state.subtitle = result.response_text
+                animation_state.subtitle = result.text
             
+            # Update portrait subtitle
             with portrait_subtitle_lock:
-                portrait_subtitle = result.response_text
+                portrait_subtitle = result.text
             
-            storage.append_interaction(person_id, result.response_text, result.mood)
+            # Save interaction with proper format
+            interaction = {
+                "person_id": person_id,
+                "text": result.text,
+                "mood": result.mood,
+                "timestamp": datetime.now().isoformat()
+            }
+            storage.append_interaction(interaction)
             
-            print(f"[Moondream Worker] Response: {result.response_text} (Mood: {result.mood})")
+            # Console log for debugging
+            print(f"\n{'='*60}")
+            print(f"[Moondream Worker] Response Generated:")
+            print(f"  Person ID: {person_id}")
+            print(f"  Portrait Says: {result.text}")
+            print(f"  Portrait Mood: {result.mood}")
+            print(f"  Animation State: mood={animation_state.mood}, speaking={animation_state.speaking}")
+            print(f"{'='*60}\n")
             
             moondream_queue.task_done()
             
@@ -498,21 +520,12 @@ def generate_camera_frames():
                     
                     if current_person:
                         face_img = detector.crop_person_for_moondream(clean_frame, current_person)
-                        
-                        people = storage.load_people()
-                        last_interaction = None
                         person_id = event.person_state.person_id if event.person_state.person_id else "unknown"
-                        
-                        if person_id in people:
-                            person_data = people[person_id]
-                            if person_data.get("last_interaction"):
-                                last_interaction = person_data["last_interaction"].get("text")
                         
                         job = {
                             "event_type": event.event_type,
                             "face_img": face_img,
-                            "person_id": person_id,
-                            "last_interaction_text": last_interaction
+                            "person_id": person_id
                         }
                         
                         try:
