@@ -562,38 +562,153 @@ def index():
     <head>
         <title>AI Vision Analysis</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
-            .container { max-width: 1200px; margin: 0 auto; }
-            .controls { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-            .control-group { margin-bottom: 15px; }
-            label { display: block; margin-bottom: 5px; font-weight: bold; }
-            select { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 200px; }
-            button { padding: 10px 20px; margin: 5px; border: none; border-radius: 4px; cursor: pointer; }
+            body { 
+                font-family: Arial, sans-serif; 
+                margin: 0; 
+                padding: 20px; 
+                background: #f0f0f0; 
+                height: 100vh;
+                box-sizing: border-box;
+            }
+            .container { 
+                max-width: 100%; 
+                margin: 0 auto; 
+                height: calc(100vh - 40px);
+                display: flex;
+                flex-direction: column;
+            }
+            .header {
+                flex-shrink: 0;
+                margin-bottom: 20px;
+            }
+            .main-content {
+                flex: 1;
+                display: flex;
+                gap: 20px;
+                min-height: 0;
+            }
+            .controls { 
+                background: white; 
+                padding: 15px; 
+                border-radius: 8px; 
+                margin-bottom: 15px;
+                flex-shrink: 0;
+            }
+            .control-group { 
+                margin-bottom: 12px; 
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            .control-group label {
+                min-width: 180px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            select { 
+                padding: 6px; 
+                border: 1px solid #ccc; 
+                border-radius: 4px; 
+                flex: 1;
+                max-width: 200px;
+            }
+            button { 
+                padding: 8px 16px; 
+                margin: 2px; 
+                border: none; 
+                border-radius: 4px; 
+                cursor: pointer; 
+                font-size: 14px;
+            }
             .btn-primary { background: #007bff; color: white; }
             .btn-danger { background: #dc3545; color: white; }
             .btn-success { background: #28a745; color: white; }
-            .video-container { background: black; display: inline-block; position: relative; }
-            img { max-width: 100%; height: auto; }
-            .terminal { background: black; color: #00ff00; font-family: 'Courier New', monospace; 
-                      padding: 10px; margin-top: 10px; border-radius: 4px; font-size: 12px; 
-                      white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
-            .status-banner { background: #dc3545; color: white; padding: 10px; border-radius: 4px; 
-                           font-weight: bold; text-align: center; margin-bottom: 20px; font-size: 18px; }
+            .video-section {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                min-width: 0;
+            }
+            .video-container { 
+                background: black; 
+                flex: 1;
+                position: relative;
+                border-radius: 8px;
+                overflow: hidden;
+                min-height: 400px;
+            }
+            img { 
+                width: 100%; 
+                height: 100%; 
+                object-fit: contain;
+                display: block;
+            }
+            .stats-section {
+                width: 350px;
+                flex-shrink: 0;
+                display: flex;
+                flex-direction: column;
+                gap: 15px;
+            }
+            .status-banner { 
+                background: #dc3545; 
+                color: white; 
+                padding: 12px; 
+                border-radius: 8px; 
+                font-weight: bold; 
+                text-align: center; 
+                font-size: 16px;
+                flex-shrink: 0;
+            }
+            .terminal { 
+                background: black; 
+                color: #00ff00; 
+                font-family: 'Courier New', monospace; 
+                padding: 12px; 
+                border-radius: 8px; 
+                font-size: 12px; 
+                white-space: pre-wrap; 
+                flex: 1;
+                overflow-y: auto;
+                min-height: 200px;
+                max-height: none;
+            }
+            .performance-stats {
+                background: white;
+                padding: 12px;
+                border-radius: 8px;
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+                flex-shrink: 0;
+            }
+            .performance-stats div {
+                margin-bottom: 4px;
+            }
+            @media (max-width: 1200px) {
+                .main-content {
+                    flex-direction: column;
+                }
+                .stats-section {
+                    width: 100%;
+                    order: -1;
+                }
+                .video-section {
+                    order: 1;
+                }
+            }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🤖 AI Vision Analysis System</h1>
-            
-            <div class="status-banner" id="statusBanner">
-                🔴 Active Model: YOLOV8 (Most Capable)
+            <div class="header">
+                <h1 style="margin: 0; text-align: center;">🤖 AI Vision Analysis System</h1>
             </div>
             
             <div class="controls">
                 <div class="control-group">
                     <label for="detectionModel">🔧 Detection Model (AI Library):</label>
                     <select id="detectionModel" onchange="changeDetectionModel()">
-                        <option value="yolov8" selected>YOLOv8 AI (Most Capable)</option>
+                        <option value="yolov8">YOLOv8 AI (Most Capable)</option>
                         <option value="tensorflow">TensorFlow AI</option>
                         <option value="opencv">OpenCV (Lightweight)</option>
                     </select>
@@ -602,7 +717,7 @@ def index():
                 <div class="control-group">
                     <label for="detectionMode">🎯 Detection Mode (What to Detect):</label>
                     <select id="detectionMode" onchange="changeDetectionMode()">
-                        <option value="all_detection" selected>All Detection</option>
+                        <option value="all_detection">All Detection</option>
                         <option value="face_features">Face Features Only</option>
                         <option value="people">People Detection Only</option>
                         <option value="general_objects">General Objects Only</option>
@@ -610,21 +725,40 @@ def index():
                     </select>
                 </div>
                 
-                <button class="btn-primary" onclick="toggleOverlay()">Toggle AI Overlay</button>
-                <button class="btn-danger" onclick="stopServer()">Stop Server</button>
-                <button class="btn-success" onclick="refreshPage()">Refresh</button>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button class="btn-primary" onclick="toggleOverlay()">Toggle AI Overlay</button>
+                    <button class="btn-danger" onclick="stopServer()">Stop Server</button>
+                    <button class="btn-success" onclick="refreshPage()">Refresh</button>
+                </div>
             </div>
             
-            <div class="video-container">
-                <img src="/video_feed" alt="Live Video Feed">
-            </div>
-            
-            <div class="terminal" id="terminal">
+            <div class="main-content">
+                <div class="stats-section">
+                    <div class="status-banner" id="statusBanner">
+                        🔴 Active Model: YOLOV8 (Most Capable)
+                    </div>
+                    
+                    <div class="performance-stats" id="performanceStats">
+                        <div><strong>Performance Stats:</strong></div>
+                        <div>Processing Time: --</div>
+                        <div>Frame Size: --</div>
+                        <div>Status: Initializing...</div>
+                    </div>
+                    
+                    <div class="terminal" id="terminal">
 Detected Objects:
 - Loading...
 
 AI Identified:
 - Initializing...
+                    </div>
+                </div>
+                
+                <div class="video-section">
+                    <div class="video-container">
+                        <img src="/video_feed" alt="Live Video Feed">
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -667,6 +801,24 @@ AI Identified:
                     .then(data => {
                         document.getElementById('statusBanner').textContent = 
                             `🔴 Active Model: ${data.model} (${data.capability})`;
+                        
+                        // Update performance stats
+                        document.getElementById('performanceStats').innerHTML = 
+                            `<div><strong>Performance Stats:</strong></div>
+                            <div>Processing Time: ${data.processing_time}</div>
+                            <div>Frame Size: ${data.frame_size}</div>
+                            <div>Status: Active</div>`;
+                        
+                        // Update dropdown selections to match current state
+                        document.getElementById('detectionModel').value = data.model.toLowerCase();
+                        document.getElementById('detectionMode').value = data.mode;
+                    })
+                    .catch(() => {
+                        document.getElementById('performanceStats').innerHTML = 
+                            `<div><strong>Performance Stats:</strong></div>
+                            <div>Processing Time: --</div>
+                            <div>Frame Size: --</div>
+                            <div>Status: Error</div>`;
                     });
             }
             
@@ -676,12 +828,22 @@ AI Identified:
                     .then(response => response.json())
                     .then(data => {
                         document.getElementById('terminal').textContent = data.terminal;
+                    })
+                    .catch(() => {
+                        document.getElementById('terminal').textContent = 'Error loading terminal data...';
                     });
                 updateStatus();
             }, 2000);
             
             // Initial status update
             updateStatus();
+            
+            // Make responsive adjustments
+            window.addEventListener('resize', function() {
+                // Force layout recalculation if needed
+                const container = document.querySelector('.container');
+                container.style.height = 'calc(100vh - 40px)';
+            });
         </script>
     </body>
     </html>
