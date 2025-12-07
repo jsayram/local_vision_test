@@ -102,6 +102,32 @@ class ChatManager:
         print(f"[Chat] Portrait message added (person_id={person_id}, mood={mood})")
         return message
     
+    def get_recent_messages_formatted(self, person_id: Optional[int], count: int = 10) -> List[Dict[str, str]]:
+        """
+        Get recent messages formatted for conversation context
+        
+        Args:
+            person_id: Person ID (None if unknown)
+            count: Number of recent messages to retrieve
+            
+        Returns:
+            List of dicts with 'role' and 'text' keys
+        """
+        conversation = self.get_conversation(person_id)
+        messages = conversation.get_recent_messages(count)
+        
+        formatted = []
+        for msg in messages:
+            formatted.append({
+                'role': 'user' if msg.speaker == 'user' else 'portrait',
+                'text': msg.text,
+                'mood': getattr(msg, 'mood', 'neutral'),
+                'is_voice': msg.is_voice,
+                'timestamp': msg.timestamp
+            })
+        
+        return formatted
+    
     def get_recent_messages(self, person_id: Optional[int], 
                            count: int = 10) -> List[ChatMessage]:
         """

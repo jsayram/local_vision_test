@@ -40,14 +40,15 @@ class StreamingDisplay {
             // Send complete sentence to TTS
             const sentence = this.sentenceBuffer.trim();
             if (sentence) {
+                console.log(`[Streaming] 🔊 Sending to TTS: "${sentence}"`);
                 this.socket.send('tts_speak', {text: sentence});
-                console.log('[Streaming] Sending to TTS:', sentence);
             }
             this.sentenceBuffer = '';
         }
         
         // If this is the last chunk, flush any remaining text
         if (data.is_complete && this.sentenceBuffer.trim()) {
+            console.log(`[Streaming] 🔊 Sending final to TTS: "${this.sentenceBuffer.trim()}"`);
             this.socket.send('tts_speak', {text: this.sentenceBuffer.trim()});
             this.sentenceBuffer = '';
         }

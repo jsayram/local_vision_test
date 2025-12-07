@@ -18,11 +18,11 @@
             </h1>
             <div class="header-controls">
                 <div class="voice-controls">
-                    <button id="wake-word-toggle">
+                    <button id="start-speaking-button" class="voice-button">
                         <span>🎤</span>
-                        <span>Wake Word</span>
+                        <span>Start Speaking</span>
                     </button>
-                    <div id="mic-icon"></div>
+                    <div id="mic-icon" class="mic-icon"></div>
                     <div class="voice-status" id="voice-status"></div>
                 </div>
             </div>
@@ -68,6 +68,12 @@
                     <div class="stream-text"></div>
                     <div class="stream-mood"></div>
                 </div>
+                
+                <!-- Transcription Overlay -->
+                <div class="transcription-overlay" id="transcription-overlay-portrait">
+                    <span class="transcription-label">You:</span>
+                    <span class="transcription-text"></span>
+                </div>
             </div>
         </section>
 
@@ -100,14 +106,21 @@
                 </div>
                 
                 <div class="camera-info">
-                    <h3>Voice Detection</h3>
+                    <h3>Voice Status</h3>
                     <div class="info-item">
-                        <span class="info-label">Wake Word:</span>
-                        <span class="info-value" id="wake-word-status">Inactive</span>
+                        <span class="info-label">Microphone:</span>
+                        <span class="info-value" id="mic-status">Ready</span>
                     </div>
                     <div class="info-item">
                         <span class="info-label">Status:</span>
-                        <span class="info-value" id="voice-status-text">Not listening</span>
+                        <span class="info-value" id="voice-status-text">Idle</span>
+                    </div>
+                </div>
+                
+                <div class="camera-info">
+                    <h3>Voice Transcription</h3>
+                    <div class="transcription-log" id="transcription-log">
+                        <div class="transcription-placeholder">Click "Start Speaking" to begin...</div>
                     </div>
                 </div>
             </div>
@@ -178,31 +191,6 @@
                 document.getElementById('detection-status').textContent = status;
                 
                 console.log('[Detection]', data.people_count, 'people,', data.object_count, 'total objects');
-            });
-            
-            // Voice detection updates
-            socketManager.on('voice_detection_update', (data) => {
-                const wakeWordStatus = document.getElementById('wake-word-status');
-                const voiceStatusText = document.getElementById('voice-status-text');
-                
-                if (data.listening) {
-                    wakeWordStatus.textContent = 'Active';
-                    wakeWordStatus.style.color = '#4CAF50';
-                } else {
-                    wakeWordStatus.textContent = 'Inactive';
-                    wakeWordStatus.style.color = '#999';
-                }
-                
-                voiceStatusText.textContent = data.status;
-                
-                if (data.triggered) {
-                    voiceStatusText.style.color = '#FFD700';
-                    setTimeout(() => {
-                        voiceStatusText.style.color = '';
-                    }, 2000);
-                }
-                
-                console.log('[Voice Detection]', data.status);
             });
             
             console.log('[App] Initialization complete');

@@ -60,6 +60,32 @@ class SocketManager extends EventTarget {
             this.emit('voice_detection_update', data);
         });
         
+        // Offline speech recognition events
+        this.socket.on('speech_partial', (data) => {
+            this.emit('speech_partial', data);
+        });
+        
+        this.socket.on('speech_final', (data) => {
+            this.emit('speech_final', data);
+        });
+        
+        this.socket.on('speech_status', (data) => {
+            this.emit('speech_status', data);
+        });
+        
+        this.socket.on('auto_chat_message', (data) => {
+            this.emit('auto_chat_message', data);
+        });
+        
+        // TTS events
+        this.socket.on('tts_started', (data) => {
+            this.emit('tts_started', data);
+        });
+        
+        this.socket.on('tts_error', (data) => {
+            this.emit('tts_error', data);
+        });
+        
         console.log('[Socket] Initializing connection...');
     }
     

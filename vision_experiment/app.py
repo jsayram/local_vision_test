@@ -41,10 +41,10 @@ from detectors.yolo_detector import YOLODetector
 
 # Import new feature modules
 from core.face_recognition_manager import FaceRecognitionManager
-from core.wake_word_listener import create_wake_word_listener
 from core.voice_manager import create_voice_manager
 from core.stream_manager import StreamManager
 from core.chat_manager import ChatManager, CommandParser
+from core.offline_speech_recognizer import create_offline_speech_recognizer
 
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -119,8 +119,10 @@ face_recognition_manager = FaceRecognitionManager()
 
 # Voice settings
 voice_settings = VoiceSettings()
-voice_manager = create_voice_manager(voice_settings, use_stub=True)  # Start with stub
-wake_word_listener = None  # Initialize later
+voice_manager = create_voice_manager(voice_settings, use_stub=False)  # Use real TTS
+
+# Offline speech recognition
+offline_speech = None  # Initialize on demand
 
 # Chat manager
 chat_manager = ChatManager()
@@ -132,24 +134,68 @@ stream_manager = StreamManager(words_per_second=5.0)
 current_person_id = None
 pending_face_confirmation = None  # Stores FaceRecognitionResult awaiting confirmation
 
+# Speech recognition callbacks
+def on_speech_partial(text, result):
+    """Callback for interim speech results"""
+    timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+    # Emit to frontend for live display
+    socketio.emit('speech_partial', {
+        'text': text,
+        'timestamp': timestamp
+    })
+
+def on_speech_final(text, result):
+    """Callback for final speech results"""
+    timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+    print(f"[Speech {timestamp}] ✓ FINAL: \"{text}\"")
+    
+    # Get confidence if available
+    confidence = result.get('result', [{}])[0].get('conf', 1.0) if result.get('result') else 1.0
+    
+    # Emit to frontend
+    socketio.emit('speech_final', {
+        'text': text,
+        'timestamp': timestamp,
+        'confidence': confidence
+    })
+    
+    # Auto-send to chat (simulating voice message)
+    socketio.emit('auto_chat_message', {
+        'text': text,
+        'is_voice': True
+    })
+
+def on_speech_error(error_message):
+    """Callback for speech recognition errors"""
+    timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+    print(f"[Speech {timestamp}] ❌ ERROR: {error_message}")
+    
+    # Emit error to frontend
+    socketio.emit('speech_status', {
+        'listening': False,
+        'status': error_message,
+        'error': True,
+        'requires_refresh': True
+    })
+
 # ============================================================================
 # CAMERA CLEANUP
 # ============================================================================
 
 def cleanup_all():
     """Comprehensive cleanup of all system components"""
-    global cap, server_running, wake_word_listener
+    global cap, server_running, offline_speech
     
     print("\n[Cleanup] Shutting down Living Portrait System...")
     server_running = False
     
-    # Stop wake word listener
-    if wake_word_listener:
+    # Stop speech recognition
+    if offline_speech:
         try:
-            wake_word_listener.stop()
-            print("[Cleanup] Wake word listener stopped")
+            offline_speech.stop()
+            print("[Cleanup] Speech recognition stopped")
         except Exception as e:
-            print(f"[Cleanup] Error stopping wake word: {e}")
+            print(f"[Cleanup] Error stopping speech: {e}")
     
     # Stop voice manager
     if voice_manager:
@@ -393,6 +439,11 @@ def moondream_worker():
             
             print(f"[Moondream Worker] Processing {event_type.name} event for person {person_id}")
             
+            # If this is a chat/voice message, ensure it's in chat history
+            if event_type in [EventType.CHAT_MESSAGE, EventType.VOICE_MESSAGE] and context.user_message:
+                # User message should already be added by handle_chat_message, but ensure it's there
+                pass
+            
             # Show typing indicator
             socketio.emit('typing_indicator', {'is_typing': True})
             
@@ -609,7 +660,9 @@ def handle_chat_message(data):
     if not text:
         return
     
-    print(f"[Chat] Received {'voice' if is_voice else 'text'} message: {text}")
+    timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+    print(f"[Chat {timestamp}] {'🎤 VOICE' if is_voice else '⌨️  TEXT'}: \"{text}\"")
+    print(f"[Chat {timestamp}] Person: {person_id or 'unknown'}")
     
     # Check for special commands
     command = CommandParser.parse_command(text)
@@ -639,7 +692,7 @@ def handle_chat_message(data):
     context = MoondreamContext(
         person_id=person_id,
         name=current_state.name,
-        recent_interactions=storage.get_recent_interactions(person_id, count=5),
+        recent_interactions=chat_manager.get_recent_messages_formatted(person_id, count=5),
         event_type=EventType.VOICE_MESSAGE.value if is_voice else EventType.CHAT_MESSAGE.value,
         user_message=text
     )
@@ -678,44 +731,64 @@ def handle_command(command, person_id):
         if voice_manager:
             voice_manager.speak("Starting fresh!", use_buffer=False)
 
-@socketio.on('start_wake_word')
-def handle_start_wake_word():
-    """Start wake word listening"""
-    global wake_word_listener
+@socketio.on('start_speech_recognition')
+def handle_start_speech(data=None):
+    """Start offline speech recognition"""
+    global offline_speech
     
-    if wake_word_listener is None:
-        wake_word_listener = create_wake_word_listener(
-            wake_word=voice_settings.wake_word,
-            sensitivity=voice_settings.wake_word_threshold,
-            on_wake_word=on_wake_word_detected,
-            use_stub=True  # Use stub for now
+    timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+    print(f"[Speech {timestamp}] Starting offline speech recognition...")
+    
+    if offline_speech is None:
+        offline_speech = create_offline_speech_recognizer(
+            model_path="models/vosk-en",
+            on_partial=on_speech_partial,
+            on_final=on_speech_final,
+            on_error=on_speech_error,
+            use_stub=False
         )
     
-    if wake_word_listener.start():
-        print("[Wake Word] Started listening")
-        emit('wake_word_status', {'active': True})
-        socketio.emit('voice_detection_update', {'listening': True, 'status': 'Listening for wake word'})
+    if offline_speech.start():
+        print(f"[Speech {timestamp}] ✓ Listening")
+        emit('speech_status', {'listening': True, 'status': 'Listening...'})
     else:
-        emit('wake_word_status', {'active': False, 'error': 'Failed to start'})
-        socketio.emit('voice_detection_update', {'listening': False, 'status': 'Failed to start'})
+        print(f"[Speech {timestamp}] ✗ Failed to start")
+        emit('speech_status', {
+            'listening': False, 
+            'status': 'Failed - Check Vosk model installation',
+            'error': True
+        })
 
-@socketio.on('stop_wake_word')
-def handle_stop_wake_word():
-    """Stop wake word listening"""
-    global wake_word_listener
+@socketio.on('stop_speech_recognition')
+def handle_stop_speech(data=None):
+    """Stop offline speech recognition"""
+    global offline_speech
     
-    if wake_word_listener:
-        wake_word_listener.stop()
-        print("[Wake Word] Stopped listening")
+    timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
     
-    emit('wake_word_status', {'active': False})
-    socketio.emit('voice_detection_update', {'listening': False, 'status': 'Stopped'})
+    if offline_speech:
+        offline_speech.stop()
+        print(f"[Speech {timestamp}] Stopped")
+    
+    emit('speech_status', {'listening': False, 'status': 'Idle'})
 
-def on_wake_word_detected():
-    """Callback when wake word is detected"""
-    print("[Wake Word] Detected!")
-    socketio.emit('wake_word_detected', {})
-    socketio.emit('voice_detection_update', {'listening': True, 'status': 'Wake word detected!', 'triggered': True})
+@socketio.on('tts_speak')
+def handle_tts_speak(data):
+    """Handle TTS request from client"""
+    text = data.get('text', '').strip()
+    if not text:
+        return
+    
+    timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+    print(f"[TTS {timestamp}] 🔊 Speaking: \"{text}\"")
+    
+    if voice_manager and voice_manager.is_available():
+        socketio.emit('tts_started', {'text': text, 'timestamp': timestamp})
+        voice_manager.speak(text, use_buffer=False)
+        print(f"[TTS {timestamp}] ✓ Queued for speech")
+    else:
+        print(f"[TTS {timestamp}] ✗ Voice manager unavailable (install pyttsx3)")
+        socketio.emit('tts_error', {'error': 'TTS not available'})
 
 @socketio.on('face_confirmation')
 def handle_face_confirmation(data):

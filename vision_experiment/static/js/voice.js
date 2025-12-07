@@ -1,68 +1,40 @@
 /**
- * Voice Interaction
- * Handles wake word detection, speech recognition, and TTS coordination
+ * Voice Interaction - Offline Speech Recognition
+ * Uses server-side Vosk for completely offline speech-to-text
  */
 
 class VoiceInterface {
     constructor(socketManager) {
         this.socket = socketManager;
         this.isListening = false;
-        this.isWakeWordActive = false;
-        this.recognition = null;
         
         // UI elements
-        this.wakeWordButton = document.getElementById('wake-word-toggle');
+        this.speakButton = document.getElementById('start-speaking-button');
         this.micIcon = document.getElementById('mic-icon');
         this.voiceStatus = document.getElementById('voice-status');
+        this.micStatus = document.getElementById('mic-status');
+        this.voiceStatusText = document.getElementById('voice-status-text');
         this.confirmationModal = document.getElementById('confirmation-modal');
         
-        this.initializeSpeechRecognition();
+        // Transcription elements
+        this.transcriptionLog = document.getElementById('transcription-log');
+        this.transcriptionOverlay = document.getElementById('transcription-overlay-portrait');
+        
         this.initializeEventListeners();
     }
     
-    initializeSpeechRecognition() {
-        // Check if browser supports Web Speech API
-        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-            console.warn('[Voice] Speech recognition not supported');
-            this.showStatus('Voice input not supported in this browser', 'warning');
-            return;
-        }
-        
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        this.recognition = new SpeechRecognition();
-        
-        this.recognition.continuous = false;
-        this.recognition.interimResults = false;
-        this.recognition.lang = 'en-US';
-        
-        this.recognition.onresult = (event) => {
-            const transcript = event.results[0][0].transcript;
-            console.log('[Voice] Recognized:', transcript);
-            this.handleSpeechResult(transcript);
-        };
-        
-        this.recognition.onerror = (event) => {
-            console.error('[Voice] Recognition error:', event.error);
-            this.stopListening();
-        };
-        
-        this.recognition.onend = () => {
-            console.log('[Voice] Recognition ended');
-            this.stopListening();
-        };
-        
-        console.log('[Voice] Speech recognition initialized');
-    }
-    
     initializeEventListeners() {
-        // Wake word toggle
-        this.wakeWordButton?.addEventListener('click', () => this.toggleWakeWord());
+        // Push-to-talk button
+        this.speakButton?.addEventListener('click', () => this.toggleListening());
         
-        // Socket events
-        this.socket.on('wake_word_detected', () => this.handleWakeWord());
+        // Server events
+        this.socket.on('speech_partial', (data) => this.handlePartial(data));
+        this.socket.on('speech_final', (data) => this.handleFinal(data));
+        this.socket.on('speech_status', (data) => this.handleStatus(data));
+        this.socket.on('tts_started', (data) => this.handleTTSStarted(data));
+        this.socket.on('tts_error', (data) => this.handleTTSError(data));
+        this.socket.on('auto_chat_message', (data) => this.handleAutoChat(data));
         this.socket.on('face_confirmation_request', (data) => this.showConfirmationModal(data));
-        this.socket.on('tts_started', () => this.handleTTSStarted());
-        this.socket.on('tts_finished', () => this.handleTTSFinished());
         
         // Confirmation modal buttons
         document.getElementById('confirm-yes')?.addEventListener('click', () => {
@@ -74,117 +46,169 @@ class VoiceInterface {
         });
     }
     
-    toggleWakeWord() {
-        if (this.isWakeWordActive) {
-            this.stopWakeWord();
+    toggleListening() {
+        if (this.isListening) {
+            this.stopListening();
         } else {
-            this.startWakeWord();
+            this.startListening();
         }
-    }
-    
-    startWakeWord() {
-        this.socket.emit('start_wake_word');
-        this.isWakeWordActive = true;
-        
-        this.wakeWordButton?.classList.add('active');
-        this.showStatus('Listening for "Hey Portrait"...', 'listening');
-        
-        console.log('[Voice] Wake word listening started');
-    }
-    
-    stopWakeWord() {
-        this.socket.emit('stop_wake_word');
-        this.isWakeWordActive = false;
-        
-        this.wakeWordButton?.classList.remove('active');
-        this.showStatus('Wake word disabled', 'info');
-        
-        console.log('[Voice] Wake word listening stopped');
-    }
-    
-    handleWakeWord() {
-        console.log('[Voice] Wake word detected!');
-        
-        // Play chime
-        this.playChime();
-        
-        // Show mic icon
-        this.showMicIcon();
-        
-        // Start speech recognition
-        this.startListening();
     }
     
     startListening() {
-        if (!this.recognition) {
-            console.warn('[Voice] Speech recognition not available');
-            return;
-        }
+        console.log('[Voice] 🎤 Starting offline speech recognition...');
+        this.socket.send('start_speech_recognition', {});
+        this.isListening = true;
         
-        if (this.isListening) {
-            console.log('[Voice] Already listening');
-            return;
+        // Update UI
+        this.speakButton?.classList.add('active', 'listening');
+        if (this.speakButton) {
+            this.speakButton.querySelector('span:last-child').textContent = 'Listening...';
         }
-        
-        try {
-            this.recognition.start();
-            this.isListening = true;
-            this.showStatus('Listening...', 'listening');
-            console.log('[Voice] Started listening');
-        } catch (error) {
-            console.error('[Voice] Error starting recognition:', error);
-        }
+        this.showMicIcon();
+        this.updateStatus('Starting...', 'active');
     }
     
     stopListening() {
-        if (this.recognition && this.isListening) {
-            this.recognition.stop();
-        }
-        
+        console.log('[Voice] 🛑 Stopping speech recognition...');
+        this.socket.send('stop_speech_recognition', {});
         this.isListening = false;
+        
+        // Update UI
+        this.speakButton?.classList.remove('active', 'listening');
+        if (this.speakButton) {
+            this.speakButton.querySelector('span:last-child').textContent = 'Start Speaking';
+        }
         this.hideMicIcon();
-        this.showStatus('', '');
+        this.updateStatus('Idle', 'idle');
     }
     
-    handleSpeechResult(transcript) {
-        console.log('[Voice] Speech result:', transcript);
+    handlePartial(data) {
+        // Live interim transcription from Vosk
+        console.log(`[Voice ${data.timestamp}] ... interim: "${data.text}"`);
+        this.showTranscription(data.text, false, data.timestamp);
+    }
+    
+    handleFinal(data) {
+        // Final transcription from Vosk
+        console.log(`[Voice ${data.timestamp}] ✓ FINAL (${(data.confidence * 100).toFixed(0)}%): "${data.text}"`);
+        this.showTranscription(data.text, true, data.timestamp, data.confidence);
+    }
+    
+    handleStatus(data) {
+        this.updateStatus(data.status, data.error ? 'error' : 'info');
         
-        // Send to server
-        this.socket.emit('send_chat_message', {
-            text: transcript,
-            person_id: null,  // Will be determined by server
+        // If error requires refresh, show persistent message
+        if (data.error && data.requires_refresh) {
+            this.isListening = false;
+            this.speakButton?.classList.remove('active', 'listening');
+            if (this.speakButton) {
+                this.speakButton.querySelector('span:last-child').textContent = 'Start Speaking';
+            }
+            this.hideMicIcon();
+            
+            // Show alert with refresh instruction
+            alert('Microphone Error: No audio detected.\n\n' +
+                  'Please grant microphone permissions:\n' +
+                  '1. System Preferences → Security & Privacy → Privacy → Microphone\n' +
+                  '2. Enable Terminal/Python\n' +
+                  '3. Refresh this page (⌘+R or F5)\n' +
+                  '4. Try again');
+            return;
+        }
+        
+        if (data.listening) {
+            if (this.micStatus) {
+                this.micStatus.textContent = 'Active';
+                this.micStatus.style.color = '#4CAF50';
+            }
+        } else {
+            if (this.micStatus) {
+                this.micStatus.textContent = 'Ready';
+                this.micStatus.style.color = '#999';
+            }
+            this.isListening = false;
+            this.speakButton?.classList.remove('active', 'listening');
+            if (this.speakButton) {
+                this.speakButton.querySelector('span:last-child').textContent = 'Start Speaking';
+            }
+        }
+    }
+    
+    handleAutoChat(data) {
+        // Automatically send recognized speech to chat
+        if (window.chatInterface) {
+            window.chatInterface.addMessage('user', data.text, true);
+        }
+        
+        // Also send to server
+        this.socket.send('send_chat_message', {
+            text: data.text,
+            person_id: null,
             is_voice: true
         });
-        
-        // Add to chat interface (if available)
-        if (window.chatInterface) {
-            window.chatInterface.addMessage('user', transcript, true);
-        }
-        
-        this.stopListening();
     }
     
-    playChime() {
-        // Simple beep sound using Web Audio API
-        try {
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
+    showTranscription(text, isFinal, timestamp, confidence = null) {
+        // Update portrait overlay
+        if (this.transcriptionOverlay) {
+            const textElement = this.transcriptionOverlay.querySelector('.transcription-text');
+            if (textElement) {
+                textElement.textContent = text;
+                textElement.className = isFinal ? 'transcription-final' : 'transcription-interim';
+            }
             
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
+            this.transcriptionOverlay.classList.add('active');
             
-            oscillator.frequency.value = 800;
-            oscillator.type = 'sine';
-            
-            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
-            
-            oscillator.start(audioContext.currentTime);
-            oscillator.stop(audioContext.currentTime + 0.2);
-        } catch (error) {
-            console.error('[Voice] Error playing chime:', error);
+            if (isFinal) {
+                // Hide after 3 seconds
+                setTimeout(() => {
+                    this.transcriptionOverlay.classList.remove('active');
+                }, 3000);
+            }
         }
+        
+        // Update camera panel log (final only)
+        if (isFinal && this.transcriptionLog) {
+            // Remove placeholder
+            const placeholder = this.transcriptionLog.querySelector('.transcription-placeholder');
+            if (placeholder) {
+                placeholder.remove();
+            }
+            
+            // Add new entry at top
+            const entry = document.createElement('div');
+            entry.className = 'transcription-item';
+            entry.innerHTML = `
+                <span class="transcription-timestamp">${timestamp}</span>
+                <span class="transcription-text-final">"${text}"</span>
+                ${confidence ? `<span class="transcription-confidence">${(confidence * 100).toFixed(0)}%</span>` : ''}
+            `;
+            
+            this.transcriptionLog.insertBefore(entry, this.transcriptionLog.firstChild);
+            
+            // Keep only last 10
+            const items = this.transcriptionLog.querySelectorAll('.transcription-item');
+            if (items.length > 10) {
+                items[items.length - 1].remove();
+            }
+        }
+    }
+    
+    updateStatus(message, type = 'info') {
+        if (this.voiceStatusText) {
+            this.voiceStatusText.textContent = message;
+            this.voiceStatusText.className = `info-value status-${type}`;
+        }
+    }
+    
+    handleTTSStarted(data) {
+        console.log(`[TTS ${data.timestamp}] 🔊 Speaking: "${data.text}"`);
+        this.updateStatus('Portrait speaking...', 'speaking');
+    }
+    
+    handleTTSError(data) {
+        console.error('[TTS] Error:', data.error);
+        this.updateStatus('TTS unavailable', 'error');
     }
     
     showMicIcon() {
@@ -232,28 +256,9 @@ class VoiceInterface {
     
     sendConfirmation(confirmed) {
         // confirmed: true, false, or null (timeout)
-        this.socket.emit('face_confirmation', {confirmed});
+        this.socket.send('face_confirmation', {confirmed});
         this.hideConfirmationModal();
         
         console.log('[Voice] Sent confirmation:', confirmed);
-    }
-    
-    handleTTSStarted() {
-        // Portrait started speaking
-        console.log('[Voice] Portrait speaking...');
-        this.showStatus('Portrait speaking...', 'speaking');
-    }
-    
-    handleTTSFinished() {
-        // Portrait finished speaking
-        console.log('[Voice] Portrait finished speaking');
-        this.showStatus('', '');
-    }
-    
-    showStatus(message, type = 'info') {
-        if (this.voiceStatus) {
-            this.voiceStatus.textContent = message;
-            this.voiceStatus.className = `voice-status ${type}`;
-        }
     }
 }

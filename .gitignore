@@ -159,6 +159,11 @@ yolov8x.pt
 # OpenCV Haarcascades (already in opencv installation)
 haarcascade_*.xml
 
+# Vosk Speech Recognition Models (download via script)
+vision_experiment/models/vosk-en/
+*.vosk
+vosk-model*/
+
 # Temporary files
 *.tmp
 *.temp

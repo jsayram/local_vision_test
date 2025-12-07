@@ -147,35 +147,54 @@ class MoondreamContext:
         # Add system context
         if self.system_prompt:
             parts.append(self.system_prompt)
+        else:
+            parts.append("You are a magical living portrait that can see and converse with people.")
         
         # Add person context
         if self.name:
-            parts.append(f"This is {self.name}.")
+            parts.append(f"You are speaking with {self.name}, whom you recognize.")
         elif self.person_id:
-            parts.append(f"This is person #{self.person_id}.")
+            parts.append(f"You are speaking with person #{self.person_id}, but you don't know their name yet.")
         else:
-            parts.append("This person is new to me.")
+            parts.append("This is someone new. You should introduce yourself and ask their name warmly.")
         
-        # Add recent interactions
+        # Add recent interactions for context
         if self.recent_interactions:
-            parts.append("\nRecent conversations:")
-            for interaction in self.recent_interactions[-3:]:  # Last 3
-                mood = interaction.get('mood', 'neutral')
+            parts.append("\nRecent conversation:")
+            for interaction in self.recent_interactions[-5:]:  # Last 5 exchanges
+                role = interaction.get('role', 'portrait')
                 text = interaction.get('text', '')
-                parts.append(f"  [{mood}] {text}")
+                if role == 'user':
+                    parts.append(f"  User: {text}")
+                else:
+                    parts.append(f"  You: {text}")
         
         # Add event context
-        parts.append(f"\nEvent: {self.event_type}")
+        event_hints = {
+            "NEW_PERSON": "A new person just appeared. Greet them warmly and ask their name.",
+            "CHAT_MESSAGE": "The user sent you a message. Respond naturally to continue the conversation.",
+            "VOICE_MESSAGE": "The user spoke to you. Respond naturally to what they said.",
+            "PERIODIC_UPDATE": "Continue the conversation or ask an engaging question.",
+            "POSE_CHANGED": "The person moved. Comment briefly if relevant, or continue the conversation."
+        }
+        hint = event_hints.get(self.event_type, "")
+        if hint:
+            parts.append(f"\n{hint}")
         
         # Add user's message if provided (chat or voice input)
         if self.user_message:
-            parts.append(f"\nUser says: {self.user_message}")
+            parts.append(f"\nUser says: \"{self.user_message}\"")
+            parts.append("Respond directly to what they said. Be conversational and natural.")
         
         # Add image description if provided
         if image_description:
-            parts.append(f"\nI see: {image_description}")
+            parts.append(f"\nYou can see: {image_description}")
         
-        parts.append("\nRespond in character as a magical living portrait. Be brief, warm, and engaging.")
+        # Final instructions
+        if not self.name and not self.user_message:
+            parts.append("\nIntroduce yourself as a living portrait and ask for their name.")
+        
+        parts.append("\nRespond in 1-2 short sentences. Be warm, engaging, and conversational.")
         
         return "\n".join(parts)
 
