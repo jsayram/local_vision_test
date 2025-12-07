@@ -10,6 +10,7 @@ import time
 
 from models.models import AnimationState
 from core import config
+from core import sprite_generator
 
 # ============================================================================
 # SPRITE LOADING
@@ -21,6 +22,8 @@ class SpriteManager:
     def __init__(self):
         self.sprites: Dict[str, Optional[np.ndarray]] = {}
         self.sprites_available = False
+        # Try to generate sprites if they don't exist
+        sprite_generator.ensure_sprites_exist()
         self.load_all_sprites()
     
     def load_all_sprites(self):
@@ -140,32 +143,35 @@ def overlay_sprite(canvas: np.ndarray, sprite: np.ndarray, x: int, y: int,
 def draw_fallback_sprite(canvas: np.ndarray, mood: str, x: int, y: int, 
                         width: int, height: int) -> np.ndarray:
     """
-    Draw a simple colored rectangle as fallback when sprites unavailable
+    Draw a simple colored shape as fallback when sprites unavailable
     
     Args:
         canvas: Canvas to draw on
-        mood: Current mood (determines color)
+        mood: Current mood (determines color and shape)
         x, y: Top-left position
         width, height: Rectangle dimensions
     
     Returns:
-        Canvas with rectangle drawn
+        Canvas with shape drawn
     """
+    # Map moods to display names (remove 'talking_' prefix)
+    display_mood = mood.replace('talking_', '').replace('_', ' ').upper()
     color = config.FALLBACK_COLORS.get(mood, (128, 128, 128))
     
-    # Draw filled rectangle
-    cv2.rectangle(canvas, (x, y), (x + width, y + height), color, -1)
+    # Draw filled circle instead of rectangle
+    center_x = x + width // 2
+    center_y = y + height // 2
+    radius = min(width, height) // 3
     
-    # Draw border
-    cv2.rectangle(canvas, (x, y), (x + width, y + height), (255, 255, 255), 2)
+    cv2.circle(canvas, (center_x, center_y), radius, color, -1)
+    cv2.circle(canvas, (center_x, center_y), radius, (255, 255, 255), 3)
     
-    # Draw mood text
-    text = mood.upper()
-    text_size = cv2.getTextSize(text, config.FONT_FACE, 1.0, 2)[0]
-    text_x = x + (width - text_size[0]) // 2
-    text_y = y + (height + text_size[1]) // 2
-    cv2.putText(canvas, text, (text_x, text_y), config.FONT_FACE, 
-                1.0, (255, 255, 255), 2)
+    # Draw mood text below circle
+    text_size = cv2.getTextSize(display_mood, config.FONT_FACE, 0.7, 2)[0]
+    text_x = center_x - text_size[0] // 2
+    text_y = center_y + radius + 30
+    cv2.putText(canvas, display_mood, (text_x, text_y), config.FONT_FACE, 
+                0.7, (255, 255, 255), 2)
     
     return canvas
 

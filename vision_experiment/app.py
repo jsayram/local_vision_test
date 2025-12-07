@@ -300,7 +300,8 @@ def moondream_worker():
                 recent_interactions=recent_interactions
             )
             
-            result = moondream_client.call_moondream_on_face(face_img, context)
+            # Use the wrapper which handles stub fallback properly
+            result = moondream_client.call_moondream(face_img, context, use_stub=True)
             
             # Update animation state
             with animation_state_lock:
@@ -324,10 +325,13 @@ def moondream_worker():
             # Console log for debugging
             print(f"\n{'='*60}")
             print(f"[Moondream Worker] Response Generated:")
+            print(f"  Event Type: {event_type.name}")
             print(f"  Person ID: {person_id}")
             print(f"  Portrait Says: {result.text}")
             print(f"  Portrait Mood: {result.mood}")
             print(f"  Animation State: mood={animation_state.mood}, speaking={animation_state.speaking}")
+            if event_type.name == "PERIODIC_UPDATE":
+                print(f"  ⏰ Next periodic update in ~{config.PERIODIC_UPDATE_INTERVAL}s")
             print(f"{'='*60}\n")
             
             moondream_queue.task_done()
@@ -348,6 +352,9 @@ def animation_loop():
     global animation_state, latest_portrait_frame
     print("[Animation Loop] Started")
     
+    last_logged_mood = None
+    last_logged_speaking = None
+    
     while server_running:
         try:
             with animation_state_lock:
@@ -356,8 +363,23 @@ def animation_loop():
                 current_state.speaking = animation_state.speaking
                 current_state.subtitle = animation_state.subtitle
                 current_state.mouth_open = animation_state.mouth_open
+                
+                # Log state changes
+                if (current_state.mood != last_logged_mood or 
+                    current_state.speaking != last_logged_speaking):
+                    print(f"[Animation Loop] State Update: mood={current_state.mood}, "
+                          f"speaking={current_state.speaking}, "
+                          f"subtitle={current_state.subtitle[:50] if current_state.subtitle else 'None'}...")
+                    last_logged_mood = current_state.mood
+                    last_logged_speaking = current_state.speaking
             
             portrait_frame = animator.render_portrait(current_state)
+            
+            # Validate portrait frame
+            if portrait_frame is None or portrait_frame.size == 0:
+                print("[Animation Loop] Warning: Invalid portrait frame generated")
+                time.sleep(0.1)
+                continue
             
             with portrait_frame_lock:
                 latest_portrait_frame = portrait_frame.copy()
@@ -366,6 +388,8 @@ def animation_loop():
             
         except Exception as e:
             print(f"[Animation Loop] Error: {e}")
+            import traceback
+            traceback.print_exc()
             time.sleep(0.1)
 
 # ============================================================================
@@ -479,8 +503,20 @@ def generate_camera_frames():
                 continue
 
             ret, frame = cap.read()
-            if not ret:
-                time.sleep(0.1)
+            if not ret or frame is None:
+                print("[Camera] Failed to read frame, attempting recovery...")
+                # Try to reinitialize camera
+                try:
+                    cap.release()
+                    time.sleep(0.5)
+                    cap = cv2.VideoCapture(CAMERA_INDEX)
+                    if cap.isOpened():
+                        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                        print("[Camera] Recovery successful")
+                except Exception as e:
+                    print(f"[Camera] Recovery failed: {e}")
+                time.sleep(0.5)
                 continue
 
             if not server_running:
@@ -495,44 +531,76 @@ def generate_camera_frames():
 
             if should_process:
                 # Run detection for camera feed
-                cached_detections_global = detection_manager.detect_objects(frame, detection_model, detection_mode)
+                raw_detections = detection_manager.detect_objects(frame, detection_model, detection_mode)
+                
+                # Filter and deduplicate detections
+                filtered_detections = []
+                seen_labels = {}
+                
+                for det in raw_detections:
+                    label = det.get('label', '').lower()
+                    conf = det.get('confidence', 0)
+                    
+                    # Skip false positives (unlikely objects with low confidence)
+                    if label in ['toilet', 'bed', 'sink'] and conf < 0.7:
+                        continue
+                    
+                    # For person detections, only keep the highest confidence one
+                    if label == 'person':
+                        if label not in seen_labels or conf > seen_labels[label]['confidence']:
+                            # Remove previous person if exists
+                            filtered_detections = [d for d in filtered_detections if d.get('label') != 'person']
+                            filtered_detections.append(det)
+                            seen_labels[label] = det
+                    else:
+                        # For other objects, keep all unique ones
+                        if label not in seen_labels:
+                            filtered_detections.append(det)
+                            seen_labels[label] = det
+                
+                cached_detections_global = filtered_detections
                 last_detection_time_global = current_time
                 
                 # Also run YOLO for portrait system (only detects people)
-                portrait_detections = detector.run_yolo_on_frame(clean_frame, yolo)
-                
-                # Find best person detection for event system
-                current_person = detector.find_best_person_detection(portrait_detections)
-                
-                # Detect events for portrait
-                with person_state_lock:
-                    event = detector.detect_event_from_person_state(
-                        person_state, current_person, current_time
-                    )
+                try:
+                    portrait_detections = detector.run_yolo_on_frame(clean_frame, yolo)
                     
-                    # Update person state if we got a new state from event
+                    # Find best person detection for event system
+                    current_person = detector.find_best_person_detection(portrait_detections)
+                    
+                    # Detect events for portrait
+                    with person_state_lock:
+                        event = detector.detect_event_from_person_state(
+                            person_state, current_person, current_time
+                        )
+                        
+                        # Update person state if we got a new state from event
+                        if event is not None:
+                            person_state = event.person_state
+                    
+                    # If event detected, queue Moondream job
                     if event is not None:
-                        person_state = event.person_state
-                
-                # If event detected, queue Moondream job
-                if event is not None:
-                    print(f"[Vision Loop] Event detected: {event.event_type.name}")
-                    
-                    if current_person:
-                        face_img = detector.crop_person_for_moondream(clean_frame, current_person)
-                        person_id = event.person_state.person_id if event.person_state.person_id else "unknown"
+                        print(f"[Vision Loop] Event detected: {event.event_type.name}")
                         
-                        job = {
-                            "event_type": event.event_type,
-                            "face_img": face_img,
-                            "person_id": person_id
-                        }
-                        
-                        try:
-                            moondream_queue.put_nowait(job)
-                            print(f"[Vision Loop] Queued Moondream job for {event.event_type.name}")
-                        except:
-                            print(f"[Vision Loop] Moondream queue full, dropping event")
+                        if current_person:
+                            face_img = detector.crop_person_for_moondream(clean_frame, current_person)
+                            person_id = event.person_state.person_id if event.person_state.person_id else "unknown"
+                            
+                            job = {
+                                "event_type": event.event_type,
+                                "face_img": face_img,
+                                "person_id": person_id
+                            }
+                            
+                            try:
+                                moondream_queue.put_nowait(job)
+                                print(f"[Vision Loop] Queued Moondream job for {event.event_type.name}")
+                            except:
+                                print(f"[Vision Loop] Moondream queue full, dropping event")
+                except Exception as e:
+                    print(f"[Vision Loop] Error in portrait detection: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             detections = cached_detections_global
 
@@ -569,8 +637,23 @@ def generate_camera_frames():
 
             last_frame = frame.copy()
 
-            ret, buffer = cv2.imencode('.jpg', frame)
-            frame_bytes = buffer.tobytes()
+            # Validate frame before encoding
+            if frame is None or frame.size == 0:
+                print("[Camera] Invalid frame, skipping")
+                time.sleep(0.1)
+                continue
+            
+            try:
+                ret, buffer = cv2.imencode('.jpg', frame)
+                if not ret or buffer is None:
+                    print("[Camera] Failed to encode frame")
+                    time.sleep(0.1)
+                    continue
+                frame_bytes = buffer.tobytes()
+            except Exception as e:
+                print(f"[Camera] Error encoding frame: {e}")
+                time.sleep(0.1)
+                continue
 
             if not server_running:
                 break
@@ -610,14 +693,28 @@ def generate_portrait_frames():
     try:
         while server_running:
             if latest_portrait_frame is not None:
-                with portrait_frame_lock:
-                    frame = latest_portrait_frame.copy()
-                
-                ret, buffer = cv2.imencode('.jpg', frame)
-                frame_bytes = buffer.tobytes()
-                
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                try:
+                    with portrait_frame_lock:
+                        frame = latest_portrait_frame.copy()
+                    
+                    # Validate frame
+                    if frame is None or frame.size == 0:
+                        time.sleep(0.033)
+                        continue
+                    
+                    ret, buffer = cv2.imencode('.jpg', frame)
+                    if not ret or buffer is None:
+                        time.sleep(0.033)
+                        continue
+                        
+                    frame_bytes = buffer.tobytes()
+                    
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                except Exception as e:
+                    print(f"[Portrait] Error encoding frame: {e}")
+                    time.sleep(0.033)
+                    continue
             
             time.sleep(0.033)
     except GeneratorExit:
@@ -680,7 +777,12 @@ def main():
     print("Living Portrait System Started!")
     print(f"Platform: {config.DEVICE_MODE}")
     print("Web server at http://localhost:8000")
-    print("Press Ctrl+C to stop")
+    print("\nEvent Detection Settings:")
+    print(f"  • NEW_PERSON: Triggers when someone appears")
+    print(f"  • POSE_CHANGED: IoU < {config.POSE_CHANGE_THRESHOLD} (movement detection)")
+    print(f"  • PERIODIC_UPDATE: Every {config.PERIODIC_UPDATE_INTERVAL}s while person present")
+    print(f"  • Min interval between calls: {config.MOONDREAM_MIN_INTERVAL}s")
+    print("\nPress Ctrl+C to stop")
     print("="*60 + "\n")
     
     # Configure Flask logging
