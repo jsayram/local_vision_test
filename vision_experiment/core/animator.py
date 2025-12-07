@@ -298,9 +298,8 @@ def render_portrait(animation_state: AnimationState, canvas_size: tuple = None) 
                            canvas_size[0] // 4, canvas_size[1] // 4,
                            canvas_size[0] // 2, canvas_size[1] // 2)
     
-    # Draw subtitle if present
-    if animation_state.subtitle:
-        canvas = draw_subtitle(canvas, animation_state.subtitle)
+    # Subtitle removed - chat panel already shows the text
+    # The overlay was confusing as it was not synced with chat
     
     # Draw debug info if enabled
     if config.DEBUG_MODE:

@@ -73,6 +73,21 @@ words_sent: 0</pre>
                     <h4>🔧 DIAGNOSIS</h4>
                     <pre id="debug-diagnosis" style="color: #ffa500;">Analyzing...</pre>
                 </div>
+                
+                <div class="debug-section">
+                    <h4>👁️ VISION CONFIG</h4>
+                    <div style="margin-bottom: 8px;">
+                        <label>Detail Level: </label>
+                        <select id="vision-detail-level" style="background: #333; color: white; padding: 4px 8px; border: 1px solid #555; border-radius: 4px;">
+                            <option value="basic">Basic (RPi)</option>
+                            <option value="standard" selected>Standard</option>
+                            <option value="detailed">Detailed</option>
+                            <option value="full">Full</option>
+                        </select>
+                    </div>
+                    <pre id="debug-vision">level: standard
+features: loading...</pre>
+                </div>
             </div>
         `;
         
@@ -141,6 +156,28 @@ words_sent: 0</pre>
         this.socket.on('debug_info', (data) => {
             this.updateFromServer(data);
         });
+        
+        // Vision config events
+        this.socket.on('vision_config', (data) => {
+            this.updateVisionConfig(data);
+        });
+        
+        this.socket.on('vision_config_updated', (data) => {
+            this.updateVisionConfig(data);
+            this.logEvent('VISION_CONFIG', `Level: ${data.detail_level}`);
+        });
+        
+        // Vision detail level selector
+        document.getElementById('vision-detail-level')?.addEventListener('change', (e) => {
+            const level = e.target.value;
+            this.socket.emit('set_vision_detail', { level: level });
+            console.log(`[Debug] Vision detail level changed to: ${level}`);
+        });
+        
+        // Request current vision config on init
+        setTimeout(() => {
+            this.socket.emit('get_vision_config', {});
+        }, 1000);
     }
     
     toggle() {
@@ -236,6 +273,20 @@ length: ${data.full_text?.length || 0} chars`;
         }
         
         this.runDiagnosis();
+    }
+    
+    updateVisionConfig(data) {
+        const elem = document.getElementById('debug-vision');
+        if (elem) {
+            elem.textContent = `level: ${data.detail_level}
+features: ${data.features?.join(', ') || 'none'}`;
+        }
+        
+        // Update dropdown to match current level
+        const select = document.getElementById('vision-detail-level');
+        if (select && data.detail_level) {
+            select.value = data.detail_level;
+        }
     }
     
     runDiagnosis() {

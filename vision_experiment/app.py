@@ -17,6 +17,8 @@ import signal
 import atexit
 import numpy as np
 import uuid
+import re
+from difflib import SequenceMatcher
 from queue import Queue, Empty
 from collections import defaultdict, deque
 from typing import Optional, List
@@ -111,6 +113,12 @@ portrait_frame_lock = threading.Lock()
 portrait_subtitle = "Waiting for someone to appear..."
 portrait_subtitle_lock = threading.Lock()
 
+# Recent TTS guard (prevents echo from being interpreted as user speech)
+tts_guard_lock = threading.Lock()
+tts_guard_active = False
+tts_guard_window = 12.0  # seconds to keep guard active after speech ends
+recent_tts_phrases = deque(maxlen=5)  # store recent TTS phrases with timestamps
+
 # ============================================================================
 # NEW FEATURE MANAGERS
 # ============================================================================
@@ -129,17 +137,41 @@ print(f"[LLM] Client initialized: available={llm_client.available}")
 # Set up voice manager callbacks for speaking events
 def on_tts_start(text):
     """Called when TTS starts speaking"""
+    global tts_guard_active
     socketio.emit('tts_speaking', {'speaking': True, 'text': text[:50]})
-    # Update animation state
+    # Update animation state with speaking duration estimate
+    # Estimate ~50ms per character for TTS speaking rate
+    estimated_duration = len(text) * 0.05 + 0.5  # Add 0.5s buffer
+    now = time.time()
     with animation_state_lock:
         animation_state.speaking = True
+        animation_state.speaking_until = now + estimated_duration
+        animation_state.last_mouth_toggle = now  # Reset mouth toggle timer
+    with tts_guard_lock:
+        tts_guard_active = True
+        recent_tts_phrases.append((text.strip(), now))
+    print(f"[TTS] Started speaking ({len(text)} chars, ~{estimated_duration:.1f}s)")
+    # Echo cancellation: pause speech recognition while TTS is playing
+    if offline_speech:
+        offline_speech.set_tts_playing(True)
 
 def on_tts_end():
     """Called when TTS stops speaking"""
+    global tts_guard_active
     socketio.emit('tts_speaking', {'speaking': False})
     # Update animation state
     with animation_state_lock:
         animation_state.speaking = False
+        animation_state.mouth_open = False  # Close mouth when done
+    with tts_guard_lock:
+        tts_guard_active = False
+        if recent_tts_phrases:
+            phrase, _ = recent_tts_phrases.pop()
+            recent_tts_phrases.append((phrase, time.time()))
+    print(f"[TTS] Stopped speaking")
+    # Echo cancellation: resume speech recognition when TTS stops
+    if offline_speech:
+        threading.Timer(0.75, lambda: offline_speech.set_tts_playing(False)).start()
 
 if voice_manager:
     voice_manager.on_speak_start = on_tts_start
@@ -158,10 +190,51 @@ stream_manager = StreamManager(words_per_second=5.0)
 current_person_id = None
 pending_face_confirmation = None  # Stores FaceRecognitionResult awaiting confirmation
 
+def _normalize_text_for_compare(text: str) -> str:
+    """Normalize text for fuzzy comparison (lowercase, alphanumeric only)."""
+    return re.sub(r'[^a-z0-9 ]+', '', text.lower()).strip()
+
+
+def _should_ignore_transcription(text: str) -> bool:
+    """Return True if the transcription matches the portrait's recent TTS output."""
+    if not text:
+        return False
+    normalized_transcript = _normalize_text_for_compare(text)
+    if not normalized_transcript:
+        return False
+    with tts_guard_lock:
+        guard_active = tts_guard_active
+        recent_phrases = list(recent_tts_phrases)
+    if not recent_phrases:
+        return False
+    now = time.time()
+    for phrase_text, phrase_time in recent_phrases:
+        if not phrase_text:
+            continue
+        if not guard_active and (now - phrase_time) > tts_guard_window:
+            continue
+        normalized_tts = _normalize_text_for_compare(phrase_text)
+        if not normalized_tts:
+            continue
+        if normalized_transcript in normalized_tts or normalized_tts in normalized_transcript:
+            return True
+        tokens_transcript = set(normalized_transcript.split())
+        tokens_tts = set(normalized_tts.split())
+        if tokens_transcript and tokens_tts:
+            overlap_ratio = len(tokens_transcript & tokens_tts) / max(1, len(tokens_transcript))
+            if overlap_ratio >= 0.7:
+                return True
+        similarity = SequenceMatcher(None, normalized_transcript, normalized_tts).ratio()
+        if similarity >= 0.65:
+            return True
+    return False
+
 # Speech recognition callbacks
 def on_speech_partial(text, result):
     """Callback for interim speech results"""
     timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+    if _should_ignore_transcription(text):
+        return
     # Emit to frontend for live display
     socketio.emit('speech_partial', {
         'text': text,
@@ -171,6 +244,9 @@ def on_speech_partial(text, result):
 def on_speech_final(text, result):
     """Callback for final speech results"""
     timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+    if _should_ignore_transcription(text):
+        print(f"[Speech {timestamp}] Ignored (matched portrait speech): \"{text}\"")
+        return
     print(f"[Speech {timestamp}] ✓ FINAL: \"{text}\"")
     
     # Get confidence if available
@@ -513,17 +589,16 @@ def moondream_worker():
                 'event_type': event_type.name
             })
             
-            # Update animation state
+            # Update animation state (mood and subtitle only - speaking controlled by TTS callbacks)
             with animation_state_lock:
                 animation_state.mood = result.mood
-                animation_state.speaking = True
                 animation_state.subtitle = result.text
             
             # Update portrait subtitle
             with portrait_subtitle_lock:
                 portrait_subtitle = result.text
             
-            # Add portrait message to chat
+            # Add portrait message to chat manager (for history)
             if person_id != "unknown":
                 chat_manager.add_portrait_message(
                     person_id if isinstance(person_id, int) else None,
@@ -532,15 +607,28 @@ def moondream_worker():
                     is_voice=False
                 )
             
-            # Send complete message to chat
+            # Send chat message to frontend BEFORE TTS starts
+            # This way the text appears as the portrait begins speaking
+            message_id = str(uuid.uuid4())
             socketio.emit('chat_message', {
                 'speaker': 'portrait',
                 'text': result.text,
                 'mood': result.mood,
                 'is_voice': False,
                 'timestamp': datetime.now().isoformat(),
-                'message_id': str(uuid.uuid4())
+                'message_id': message_id
             })
+            
+            # SPEAK using TTS - this triggers on_tts_start/on_tts_end callbacks
+            # which control animation_state.speaking and echo cancellation
+            if voice_manager and voice_manager.is_available():
+                print(f"[Moondream Worker] 🔊 Speaking: {result.text[:50]}...")
+                voice_manager.speak(result.text, use_buffer=False)
+            else:
+                # No TTS available - manually set speaking duration
+                with animation_state_lock:
+                    animation_state.speaking = True
+                    animation_state.speaking_until = time.time() + len(result.text) * 0.05  # ~50ms per char
             
             # Emit stream complete
             socketio.emit('stream_complete', {
@@ -596,18 +684,28 @@ def animation_loop():
     
     while server_running:
         try:
+            now = time.time()
+            
             with animation_state_lock:
+                # Update speaking animation (toggles mouth_open for talking)
+                animation_state.update_speaking(now, 0.15)  # Toggle mouth every 0.15s
+                
+                # Update subtitle visibility  
+                animation_state.update_subtitle(now)
+                
                 current_state = AnimationState()
                 current_state.mood = animation_state.mood
                 current_state.speaking = animation_state.speaking
                 current_state.subtitle = animation_state.subtitle
                 current_state.mouth_open = animation_state.mouth_open
+                current_state.speaking_until = animation_state.speaking_until
+                current_state.last_mouth_toggle = animation_state.last_mouth_toggle
                 
                 # Log state changes
                 if (current_state.mood != last_logged_mood or 
                     current_state.speaking != last_logged_speaking):
                     print(f"[Animation Loop] State Update: mood={current_state.mood}, "
-                          f"speaking={current_state.speaking}, "
+                          f"speaking={current_state.speaking}, mouth_open={current_state.mouth_open}, "
                           f"subtitle={current_state.subtitle[:50] if current_state.subtitle else 'None'}...")
                     last_logged_mood = current_state.mood
                     last_logged_speaking = current_state.speaking
@@ -845,6 +943,40 @@ def handle_get_debug_info(data=None):
         
     except Exception as e:
         print(f"[Debug] Error getting debug info: {e}")
+
+@socketio.on('set_vision_detail')
+def handle_set_vision_detail(data):
+    """Set vision analysis detail level"""
+    from core.vision_prompts import set_detail_level, get_vision_config
+    
+    level = data.get('level', 'standard')
+    set_detail_level(level)
+    
+    config = get_vision_config()
+    emit('vision_config_updated', {
+        'detail_level': config.detail_level.value,
+        'features': config.get_feature_list()
+    })
+    print(f"[Vision] Detail level changed to: {level}")
+
+@socketio.on('get_vision_config')
+def handle_get_vision_config(data=None):
+    """Get current vision config"""
+    from core.vision_prompts import get_vision_config
+    
+    config = get_vision_config()
+    emit('vision_config', {
+        'detail_level': config.detail_level.value,
+        'features': config.get_feature_list(),
+        'settings': {
+            'facial_expressions': config.include_facial_expressions,
+            'body_language': config.include_body_language,
+            'room_details': config.include_room_details,
+            'objects': config.include_objects,
+            'clothing': config.include_clothing,
+            'emotion': config.include_emotion,
+        }
+    })
 
 @socketio.on('stop_speech_recognition')
 def handle_stop_speech(data=None):

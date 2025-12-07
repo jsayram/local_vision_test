@@ -116,25 +116,29 @@ class LLMClient:
         person_name: Optional[str],
         event_type: str
     ) -> str:
-        """Build a detailed prompt for the LLM"""
+        """Build a detailed prompt for the LLM with enhanced vision context"""
         
         parts = []
         
         # System context
         parts.append("You are a magical living portrait hanging on a wall. You can see people through your frame and speak with them warmly and engagingly.")
+        parts.append("Be natural, conversational, and vary your responses. Never repeat the same phrase twice.")
         
-        # What you can see
-        parts.append(f"\nYou can see: {vision_description}")
+        # What you can see - enhanced formatting
+        if vision_description:
+            parts.append(f"\n[WHAT YOU SEE]")
+            parts.append(f"{vision_description}")
         
         # Who you're talking to
+        parts.append(f"\n[WHO YOU'RE TALKING TO]")
         if person_name:
             parts.append(f"You're speaking with {person_name}.")
         else:
-            parts.append("This is someone new - ask for their name.")
+            parts.append("This is someone new - you don't know their name yet.")
         
         # Recent conversation
         if conversation_history:
-            parts.append("\nRecent conversation:")
+            parts.append("\n[RECENT CONVERSATION]")
             for msg in conversation_history[-5:]:  # Last 5 messages
                 role = msg.get('role', 'portrait')
                 text = msg.get('text', '')
@@ -144,6 +148,7 @@ class LLMClient:
                     parts.append(f"  You: {text}")
         
         # Current situation
+        parts.append("\n[CURRENT SITUATION]")
         if event_type == "NEW_PERSON":
             parts.append("\nSituation: A new person just appeared. Greet them warmly and ask their name.")
         elif event_type == "VOICE_MESSAGE" and user_message:

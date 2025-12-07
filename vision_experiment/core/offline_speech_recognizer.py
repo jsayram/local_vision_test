@@ -49,10 +49,28 @@ class OfflineSpeechRecognizer:
         self.is_listening = False
         self.listen_thread: Optional[threading.Thread] = None
         
+        # Echo cancellation: pause recognition when TTS is playing
+        self._is_tts_playing = False
+        self._tts_lock = threading.Lock()
+        
         # Audio settings
         self.sample_rate = 16000
         self.channels = 1
         self.chunk_size = 8000
+    
+    def set_tts_playing(self, is_playing: bool):
+        """Set whether TTS is currently playing (for echo cancellation)"""
+        with self._tts_lock:
+            self._is_tts_playing = is_playing
+            if is_playing:
+                print("[Vosk] 🔇 TTS started - ignoring microphone input (echo cancellation)")
+            else:
+                print("[Vosk] 🎤 TTS ended - resuming microphone input")
+    
+    def is_tts_playing(self) -> bool:
+        """Check if TTS is currently playing"""
+        with self._tts_lock:
+            return self._is_tts_playing
         
     def is_available(self) -> bool:
         """Check if Vosk is available"""
@@ -214,11 +232,21 @@ class OfflineSpeechRecognizer:
                     result = json.loads(self.recognizer.Result())
                     text = result.get('text', '').strip()
                     
+                    # Skip if TTS is playing (echo cancellation)
+                    if self.is_tts_playing():
+                        if text:
+                            print(f"[Vosk] 🔇 Ignored (TTS playing): \"{text}\"")
+                        continue
+                    
                     if text:
                         print(f"[Vosk] ✓ FINAL: \"{text}\"")
                         if self.on_final:
                             self.on_final(text, result)
                 else:
+                    # Skip partial results if TTS is playing
+                    if self.is_tts_playing():
+                        continue
+                        
                     # Partial result (interim transcription)
                     result = json.loads(self.recognizer.PartialResult())
                     partial = result.get('partial', '').strip()
@@ -275,7 +303,16 @@ class StubOfflineSpeechRecognizer:
         self.on_final = on_final
         self.on_error = on_error
         self.is_listening = False
+        self._is_tts_playing = False
         print("[Vosk Stub] Initialized (offline speech recognition disabled)")
+    
+    def set_tts_playing(self, is_playing: bool):
+        """Stub for TTS playing state"""
+        self._is_tts_playing = is_playing
+    
+    def is_tts_playing(self) -> bool:
+        """Check if TTS is playing"""
+        return self._is_tts_playing
     
     def is_available(self):
         return False

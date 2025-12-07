@@ -187,8 +187,8 @@ class VoiceManager:
                     self.is_speaking = True
                     print(f"[Voice] Speaking: {text[:50]}...")
                     
-                    # Notify frontend that speaking started
-                    if hasattr(self, 'on_speak_start'):
+                    # Notify that speaking started (for animation and echo cancellation)
+                    if self.on_speak_start:
                         self.on_speak_start(text)
                     
                     try:
@@ -199,8 +199,8 @@ class VoiceManager:
                     
                     self.is_speaking = False
                     
-                    # Notify frontend that speaking stopped
-                    if hasattr(self, 'on_speak_end'):
+                    # Notify that speaking stopped
+                    if self.on_speak_end:
                         self.on_speak_end()
                 
             except queue.Empty:
