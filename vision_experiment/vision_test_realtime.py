@@ -40,6 +40,47 @@ show_overlay = True
 detection_model = "yolov8"  # Options: "yolov8", "tensorflow", "opencv"
 detection_mode = "all_detection"  # Options: "all_detection", "face_features", "people", "general_objects", "none"
 
+# Processing FPS control
+processing_fps = "1 FPS"  # Options: "1 FPS", "15 FPS", "1 FP 2 seconds", "1 FP 5 seconds", etc. or custom
+
+def parse_fps_string(fps_string):
+    """Parse FPS string and return interval in seconds"""
+    fps_string = fps_string.lower().strip()
+    
+    # Handle direct FPS values
+    if fps_string.endswith(' fps'):
+        try:
+            fps_value = float(fps_string.replace(' fps', ''))
+            return 1.0 / fps_value if fps_value > 0 else 1.0
+        except ValueError:
+            pass
+    
+    # Handle "1 FP X seconds" format
+    if fps_string.startswith('1 fp ') and fps_string.endswith(' seconds'):
+        try:
+            seconds = float(fps_string.replace('1 fp ', '').replace(' seconds', ''))
+            return seconds if seconds > 0 else 1.0
+        except ValueError:
+            pass
+    
+    # Handle "1 frame per X seconds" format
+    if fps_string.startswith('1 frame per ') and fps_string.endswith(' seconds'):
+        try:
+            seconds = float(fps_string.replace('1 frame per ', '').replace(' seconds', ''))
+            return seconds if seconds > 0 else 1.0
+        except ValueError:
+            pass
+    
+    # Try to parse as direct number (FPS)
+    try:
+        fps_value = float(fps_string)
+        return 1.0 / fps_value if fps_value > 0 else 1.0
+    except ValueError:
+        pass
+    
+    # Default fallback
+    return 1.0
+
 # Server control
 server_running = True
 
@@ -341,8 +382,23 @@ def run_camera_mode():
     app.run(host='0.0.0.0', port=8000, debug=False, threaded=True)
 
 def generate_frames():
-    global cap, processing, last_capture, interval, show_overlay, server_running
+    global cap, processing, last_capture, interval, show_overlay, server_running, processing_fps
     while server_running:
+        if not server_running:  # Check again before reading frame
+            break
+            
+        if cap is None or not cap.isOpened():
+            break
+            
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        if not server_running:  # Check again before processing
+            break
+            
+        # Update interval based on current FPS setting
+        interval = parse_fps_string(processing_fps)
         if not server_running:  # Check again before reading frame
             break
             
@@ -724,6 +780,30 @@ def index():
                         <option value="none">No Detection</option>
                     </select>
                 </div>
+
+                <div class="control-group">
+                    <label for="processingFps">⚡ Processing Rate (FPS/Interval):</label>
+                    <div style="display: flex; gap: 5px; align-items: center;">
+                        <select id="processingFpsSelect" onchange="changeProcessingFps()">
+                            <option value="1 FPS">1 FPS</option>
+                            <option value="15 FPS">15 FPS</option>
+                            <option value="1 FP 2 seconds">1 FP 2 seconds</option>
+                            <option value="1 FP 5 seconds">1 FP 5 seconds</option>
+                            <option value="1 FP 10 seconds">1 FP 10 seconds</option>
+                            <option value="1 FP 30 seconds">1 FP 30 seconds</option>
+                            <option value="1 FP 60 seconds">1 FP 60 seconds</option>
+                            <option value="1 frame per 2 seconds">1 frame per 2 seconds</option>
+                            <option value="1 frame per 5 seconds">1 frame per 5 seconds</option>
+                            <option value="1 frame per 10 seconds">1 frame per 10 seconds</option>
+                            <option value="1 frame per 30 seconds">1 frame per 30 seconds</option>
+                            <option value="1 frame per 60 seconds">1 frame per 60 seconds</option>
+                        </select>
+                        <input type="text" id="processingFpsInput" placeholder="Custom FPS..." 
+                               style="padding: 6px; border: 1px solid #ccc; border-radius: 4px; width: 120px;" 
+                               onkeypress="handleFpsInputKeyPress(event)">
+                        <button onclick="applyCustomFps()" style="padding: 6px 12px; font-size: 12px;">Apply</button>
+                    </div>
+                </div>
                 
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                     <button class="btn-primary" onclick="toggleOverlay()">Toggle AI Overlay</button>
@@ -781,6 +861,33 @@ AI Identified:
                 });
             }
             
+            function changeProcessingFps() {
+                const fps = document.getElementById('processingFpsSelect').value;
+                document.getElementById('processingFpsInput').value = ''; // Clear custom input
+                applyFpsChange(fps);
+            }
+            
+            function handleFpsInputKeyPress(event) {
+                if (event.key === 'Enter') {
+                    applyCustomFps();
+                }
+            }
+            
+            function applyCustomFps() {
+                const customFps = document.getElementById('processingFpsInput').value.trim();
+                if (customFps) {
+                    applyFpsChange(customFps);
+                }
+            }
+            
+            function applyFpsChange(fps) {
+                fetch('/change_processing_fps', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fps: fps })
+                }).then(() => updateStatus());
+            }
+            
             function toggleOverlay() {
                 fetch('/toggle_overlay');
             }
@@ -807,17 +914,35 @@ AI Identified:
                             `<div><strong>Performance Stats:</strong></div>
                             <div>Processing Time: ${data.processing_time}</div>
                             <div>Frame Size: ${data.frame_size}</div>
+                            <div>Processing Rate: ${data.fps}</div>
                             <div>Status: Active</div>`;
                         
                         // Update dropdown selections to match current state
                         document.getElementById('detectionModel').value = data.model.toLowerCase();
                         document.getElementById('detectionMode').value = data.mode;
+                        
+                        // Handle FPS selection/input
+                        const fpsSelect = document.getElementById('processingFpsSelect');
+                        const fpsInput = document.getElementById('processingFpsInput');
+                        const currentFps = data.fps;
+                        
+                        // Check if current FPS is in the dropdown options
+                        const options = Array.from(fpsSelect.options).map(opt => opt.value);
+                        if (options.includes(currentFps)) {
+                            fpsSelect.value = currentFps;
+                            fpsInput.value = '';
+                        } else {
+                            // Custom value - put it in the input field
+                            fpsSelect.value = options[0]; // Reset dropdown to first option
+                            fpsInput.value = currentFps;
+                        }
                     })
                     .catch(() => {
                         document.getElementById('performanceStats').innerHTML = 
                             `<div><strong>Performance Stats:</strong></div>
                             <div>Processing Time: --</div>
                             <div>Frame Size: --</div>
+                            <div>Processing Rate: --</div>
                             <div>Status: Error</div>`;
                     });
             }
@@ -871,6 +996,24 @@ def change_detection_mode():
         return {'mode': detection_mode, 'success': True}
     return {'error': 'Invalid mode'}, 400
 
+@app.route('/change_processing_fps', methods=['POST'])
+def change_processing_fps():
+    global processing_fps, interval
+    from flask import request
+    data = request.get_json()
+    new_fps = data.get('fps', '1 FPS')
+    # Validate by trying to parse
+    try:
+        test_interval = parse_fps_string(new_fps)
+        if test_interval > 0:
+            processing_fps = new_fps
+            interval = test_interval
+            print(f"Processing FPS changed to: {processing_fps} (interval: {interval:.2f}s)")
+            return {'fps': processing_fps, 'interval': interval, 'success': True}
+    except:
+        pass
+    return {'error': 'Invalid FPS format'}, 400
+
 @app.route('/change_detection_model', methods=['POST'])
 def change_detection_model():
     global detection_model
@@ -885,7 +1028,7 @@ def change_detection_model():
 
 @app.route('/get_status')
 def get_status():
-    global detection_model, detection_mode, current_processing_time, current_frame_size
+    global detection_model, detection_mode, current_processing_time, current_frame_size, processing_fps
     
     # Get model capability description
     model_capabilities = {
@@ -899,7 +1042,8 @@ def get_status():
         'capability': model_capabilities.get(detection_model, 'Unknown'),
         'mode': detection_mode,
         'processing_time': f"{current_processing_time:.2f}s",
-        'frame_size': f"{current_frame_size[0]}x{current_frame_size[1]}"
+        'frame_size': f"{current_frame_size[0]}x{current_frame_size[1]}",
+        'fps': processing_fps
     }
 
 @app.route('/get_terminal_data')
