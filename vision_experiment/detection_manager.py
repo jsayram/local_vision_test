@@ -149,6 +149,12 @@ class DetectionManager:
                             'color': (0, 255, 255)  # Yellow
                         })
 
+            # Debug output
+            if len(detections) > 0:
+                print(f"YOLO detected {len(detections)} objects: {[d['label'] for d in detections]}")
+            else:
+                print("YOLO: No objects detected above confidence threshold")
+            
             return detections
         except Exception as e:
             print(f"YOLO detection error: {e}")
@@ -216,15 +222,20 @@ class DetectionManager:
             print(f"TensorFlow detection error: {e}")
             return []
 
+        return detections
+
     def _detect_opencv(self, frame, mode):
         """OpenCV cascade detection"""
         detections = []
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
+        print(f"[DEBUG] OpenCV detection running with mode: {mode}")
+        
         # Face detection
         if mode in ['face_features', 'all_detection']:
             if self.cascades.get('face') is not None:
                 faces = self.cascades['face'].detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+                print(f"[DEBUG] Face detection: found {len(faces)} faces")
                 for (x, y, w, h) in faces:
                     detections.append({
                         'bbox': (x, y, x+w, y+h),
@@ -236,6 +247,7 @@ class DetectionManager:
             # Profile faces
             if self.cascades.get('profile_face') is not None:
                 profile_faces = self.cascades['profile_face'].detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+                print(f"[DEBUG] Profile face detection: found {len(profile_faces)} profile faces")
                 for (x, y, w, h) in profile_faces:
                     detections.append({
                         'bbox': (x, y, x+w, y+h),
@@ -248,6 +260,7 @@ class DetectionManager:
         if mode in ['people', 'all_detection']:
             if self.cascades.get('fullbody') is not None:
                 bodies = self.cascades['fullbody'].detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(60, 120))
+                print(f"[DEBUG] Full body detection: found {len(bodies)} bodies")
                 for (x, y, w, h) in bodies:
                     detections.append({
                         'bbox': (x, y, x+w, y+h),
@@ -258,6 +271,7 @@ class DetectionManager:
 
             if self.cascades.get('upperbody') is not None:
                 upper_bodies = self.cascades['upperbody'].detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(40, 80))
+                print(f"[DEBUG] Upper body detection: found {len(upper_bodies)} upper bodies")
                 for (x, y, w, h) in upper_bodies:
                     detections.append({
                         'bbox': (x, y, x+w, y+h),
@@ -270,6 +284,7 @@ class DetectionManager:
         if mode in ['general_objects', 'all_detection']:
             if self.cascades.get('car') is not None:
                 cars = self.cascades['car'].detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(80, 80))
+                print(f"[DEBUG] Car detection: found {len(cars)} cars")
                 for (x, y, w, h) in cars:
                     detections.append({
                         'bbox': (x, y, x+w, y+h),
@@ -277,7 +292,8 @@ class DetectionManager:
                         'confidence': 0.7,
                         'color': (255, 0, 255)
                     })
-
+        
+        print(f"[DEBUG] OpenCV detection completed: {len(detections)} total detections")
         return detections
 
     def _should_include_detection(self, label, mode):
