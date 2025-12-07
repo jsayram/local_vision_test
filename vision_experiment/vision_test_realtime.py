@@ -36,6 +36,7 @@ processing = False
 last_capture = 0
 interval = 1.0 / PROCESS_FPS
 show_overlay = True
+paused = False  # Pause/Resume control
 
 # Detection control (separate model and mode)
 detection_model = "yolov8"  # Options: "yolov8", "tensorflow", "opencv"
@@ -278,13 +279,24 @@ def run_camera_mode():
     app.run(host='0.0.0.0', port=8000, debug=False, threaded=True)
 
 def generate_frames():
-    global cap, processing, last_capture, interval, show_overlay, server_running, processing_fps
+    global cap, processing, last_capture, interval, show_overlay, server_running, processing_fps, paused
+    last_frame = None  # Store last frame for pause mode
+    
     while server_running:
         if not server_running:  # Check again before reading frame
             break
             
         if cap is None or not cap.isOpened():
             break
+        
+        # If paused, keep yielding the last frame
+        if paused and last_frame is not None:
+            ret, buffer = cv2.imencode('.jpg', last_frame)
+            frame_bytes = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(0.1)
+            continue
             
         ret, frame = cap.read()
         if not ret:
@@ -311,82 +323,115 @@ def generate_frames():
         # Keep a clean copy for AI processing (before overlays)
         clean_frame = frame.copy()
         
-        # Apply detection using DetectionManager
-        detections = detection_manager.detect_objects(frame, detection_model, detection_mode)
-        detected_objects = [f"{det['label']} ({det['confidence']:.2f})" for det in detections]
+        # Only apply detection and overlays if show_overlay is True
+        if show_overlay:
+            # Apply detection using DetectionManager
+            detections = detection_manager.detect_objects(frame, detection_model, detection_mode)
+            detected_objects = [f"{det['label']} ({det['confidence']:.2f})" for det in detections]
 
-        # Draw detections on frame
-        detection_manager.draw_detections(frame, detections)
+            # Draw detections on frame
+            detection_manager.draw_detections(frame, detections)
+        else:
+            # No overlay - just use clean frame, no detections displayed
+            detections = []
+            detected_objects = []
 
-        # Create terminal-like window at bottom
         frame_height, frame_width = frame.shape[:2]
-        terminal_height = 120
-        cv2.rectangle(frame, (0, frame_height - terminal_height), (frame_width, frame_height), (0, 0, 0), -1)
-        cv2.rectangle(frame, (0, frame_height - terminal_height), (frame_width, frame_height), (255, 255, 255), 2)
-
-        # Display three-column view: Detection | AI | Detection+AI
-        y_pos = frame_height - terminal_height + 25
-
-        # Get detection objects
-        detection_objects = [f"{det['label'].title()} ({det['confidence']:.2f})" for det in detections]
-
-        # Get AI objects
-        ai_objects = []
-        if show_overlay and current_description:
-            keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant',
-                       'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door',
-                       'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse',
-                       'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch',
-                       'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot', 'potted plant']
-            description_lower = current_description.lower()
-            ai_objects = [word.title() for word in keywords if word.lower() in description_lower]
-            ai_objects = list(set(ai_objects))  # Remove duplicates
-
-        # Get correlated results
-        correlated_results = correlate_ai_detection(current_description, detections) if (detections or ai_objects) else []
-
-        # Column headers
-        col_width = frame_width // 3
-        cv2.putText(frame, 'Detection', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        cv2.putText(frame, 'AI', (col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-        cv2.putText(frame, 'Detection+AI', (2 * col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-
-        # Draw column separators
-        cv2.line(frame, (col_width, frame_height - terminal_height), (col_width, frame_height), (255, 255, 255), 1)
-        cv2.line(frame, (2 * col_width, frame_height - terminal_height), (2 * col_width, frame_height), (255, 255, 255), 1)
-
-        y_pos += 20
-
-        # Display items in each column (max 6 per column)
-        max_items = 6
-        for i in range(max_items):
-            # Detection column
-            if i < len(detection_objects):
-                cv2.putText(frame, f'- {detection_objects[i]}', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-
-            # AI column
-            if i < len(ai_objects):
-                cv2.putText(frame, f'- {ai_objects[i]}', (col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-
-            # Detection+AI column
-            if i < len(correlated_results):
-                obj_name, conf, source = correlated_results[i]
-                # Color code by source
-                if source == "AI + Detection":
-                    color = (0, 255, 0)  # Green for both
-                elif source == "Detection Only":
-                    color = (255, 255, 0)  # Yellow for detection only
-                else:  # AI Only
-                    color = (255, 165, 0)  # Orange for AI only
-
-                cv2.putText(frame, f'- {obj_name} ({conf:.2f})', (2 * col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-
-            y_pos += 15
         
-        # Store data for terminal endpoint
-        get_terminal_data.detection_objects = detection_objects
-        get_terminal_data.ai_objects = ai_objects
-        get_terminal_data.correlated_objects = [f"{obj} ({conf:.2f}) [{source}]" for obj, conf, source in correlated_results]
+        # Only show terminal overlay when overlay is enabled
+        if show_overlay:
+            # Create terminal-like window at bottom (increased height for better display)
+            terminal_height = 220  # Increased for bigger text
+            cv2.rectangle(frame, (0, frame_height - terminal_height), (frame_width, frame_height), (0, 0, 0), -1)
+            cv2.rectangle(frame, (0, frame_height - terminal_height), (frame_width, frame_height), (255, 255, 255), 2)
+
+            # Display three-column view: Detection | AI | Detection+AI with better formatting
+            y_pos = frame_height - terminal_height + 30
+
+            # Get detection objects with confidence
+            detection_objects = [f"{det['label'].title()} ({det['confidence']:.2f})" for det in detections]
+
+            # Get AI objects
+            ai_objects = []
+            if current_description:
+                keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant',
+                           'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door',
+                           'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse',
+                           'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch',
+                           'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot', 'potted plant']
+                description_lower = current_description.lower()
+                ai_objects = [word.title() for word in keywords if word.lower() in description_lower]
+                ai_objects = list(set(ai_objects))  # Remove duplicates
+
+            # Get correlated results
+            correlated_results = correlate_ai_detection(current_description, detections) if (detections or ai_objects) else []
+
+            # Column headers with BIGGER TEXT
+            col_width = frame_width // 3
+            cv2.putText(frame, 'DETECTION', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+            cv2.putText(frame, 'AI', (col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 2)
+            cv2.putText(frame, 'DETECTION+AI', (2 * col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+
+            # Draw column separators
+            cv2.line(frame, (col_width, frame_height - terminal_height), (col_width, frame_height), (255, 255, 255), 2)
+            cv2.line(frame, (2 * col_width, frame_height - terminal_height), (2 * col_width, frame_height), (255, 255, 255), 2)
+
+            y_pos += 30
+
+            # Display items in each column with BIGGER TEXT (max 6 per column)
+            max_items = 6
+            for i in range(max_items):
+                # Detection column - show with confidence in bigger text
+                if i < len(detection_objects):
+                    text = detection_objects[i]
+                    # Truncate if too long to prevent wrapping
+                    if len(text) > 20:
+                        text = text[:17] + "..."
+                    cv2.putText(frame, f'{text}', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+                # AI column
+                if i < len(ai_objects):
+                    text = ai_objects[i]
+                    if len(text) > 14:
+                        text = text[:11] + "..."
+                    cv2.putText(frame, f'{text}', (col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+                # Detection+AI column - show confidence prominently
+                if i < len(correlated_results):
+                    obj_name, conf, source = correlated_results[i]
+                    text = f"{obj_name} ({conf:.0%})"  # Show as percentage for clarity
+                    if len(text) > 22:
+                        text = text[:19] + "..."
+                    # Color code by source
+                    if source == "AI + Detection":
+                        color = (0, 255, 0)  # Green for both
+                    elif source == "Detection Only":
+                        color = (255, 255, 0)  # Yellow for detection only
+                    else:  # AI Only
+                        color = (255, 165, 0)  # Orange for AI only
+
+                    cv2.putText(frame, f'{text}', (2 * col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+
+                y_pos += 28  # Bigger line spacing
+            
+            # Add overall confidence summary at bottom
+            if correlated_results:
+                avg_conf = sum(c[1] for c in correlated_results) / len(correlated_results)
+                conf_text = f"Avg Confidence: {avg_conf:.0%} | Objects: {len(correlated_results)}"
+                cv2.putText(frame, conf_text, (10, frame_height - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            
+            # Store data for terminal endpoint
+            get_terminal_data.detection_objects = detection_objects
+            get_terminal_data.ai_objects = ai_objects
+            get_terminal_data.correlated_objects = [f"{obj} ({conf:.2f}) [{source}]" for obj, conf, source in correlated_results]
+        else:
+            # No overlay - store empty data
+            get_terminal_data.detection_objects = []
+            get_terminal_data.ai_objects = []
+            get_terminal_data.correlated_objects = []
+        
+        # Store the frame for pause mode
+        last_frame = frame.copy()
         
         # Encode frame for streaming
         ret, buffer = cv2.imencode('.jpg', frame)
@@ -398,9 +443,9 @@ def generate_frames():
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
         
-        # Check if we should process this frame
+        # Check if we should process this frame (skip if paused)
         current_time = time.time()
-        if current_time - last_capture > interval and not processing:
+        if current_time - last_capture > interval and not processing and not paused:
             processing = True
             last_capture = current_time
             # Start processing thread - use clean_frame without overlays
@@ -492,8 +537,10 @@ def index():
             .btn-primary { background: #007bff; color: white; }
             .btn-danger { background: #dc3545; color: white; }
             .btn-success { background: #28a745; color: white; }
+            .btn-warning { background: #ffc107; color: #212529; }
+            .btn-resume { background: #17a2b8; color: white; }
             .video-section {
-                flex: 1;
+                flex: 2;
                 display: flex;
                 flex-direction: column;
                 min-width: 0;
@@ -504,7 +551,7 @@ def index():
                 position: relative;
                 border-radius: 8px;
                 overflow: hidden;
-                min-height: 400px;
+                min-height: 500px;
             }
             img { 
                 width: 100%; 
@@ -512,8 +559,15 @@ def index():
                 object-fit: contain;
                 display: block;
             }
+            .right-panel {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                gap: 15px;
+                min-width: 400px;
+                max-width: 500px;
+            }
             .stats-section {
-                width: 350px;
                 flex-shrink: 0;
                 display: flex;
                 flex-direction: column;
@@ -536,11 +590,82 @@ def index():
                 padding: 12px; 
                 border-radius: 8px; 
                 font-size: 12px; 
-                white-space: pre-wrap; 
+                white-space: pre; 
                 flex: 1;
+                overflow-x: auto;
                 overflow-y: auto;
                 min-height: 200px;
                 max-height: none;
+                word-wrap: normal;
+                word-break: keep-all;
+            }
+            .descriptions-section {
+                background: white;
+                padding: 15px;
+                border-radius: 8px;
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                min-height: 150px;
+            }
+            .descriptions-header {
+                font-weight: bold;
+                margin-bottom: 10px;
+                color: #333;
+                border-bottom: 2px solid #007bff;
+                padding-bottom: 5px;
+            }
+            .ai-description {
+                background: #f8f9fa;
+                padding: 12px;
+                border-radius: 6px;
+                border-left: 4px solid #007bff;
+                font-family: Arial, sans-serif;
+                font-size: 14px;
+                line-height: 1.5;
+                color: #333;
+                flex: 1;
+                overflow-y: auto;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+            }
+            .system-stats {
+                background: white;
+                padding: 15px;
+                border-radius: 8px;
+                flex-shrink: 0;
+            }
+            .system-stats-header {
+                font-weight: bold;
+                margin-bottom: 10px;
+                color: #333;
+                border-bottom: 2px solid #28a745;
+                padding-bottom: 5px;
+            }
+            .stats-row {
+                display: flex;
+                gap: 15px;
+                font-family: 'Courier New', monospace;
+                font-size: 13px;
+            }
+            .stat-item {
+                background: #f8f9fa;
+                padding: 8px 12px;
+                border-radius: 4px;
+                border-left: 3px solid #28a745;
+                flex: 1;
+                text-align: center;
+            }
+            .stat-label {
+                font-weight: bold;
+                color: #495057;
+                display: block;
+                margin-bottom: 4px;
+            }
+            .stat-value {
+                color: #007bff;
+                font-weight: bold;
+                font-size: 16px;
             }
             .performance-stats {
                 background: white;
@@ -553,12 +678,29 @@ def index():
             .performance-stats div {
                 margin-bottom: 4px;
             }
+            .overlay-toggle {
+                background: #007bff;
+                color: white;
+                padding: 8px 16px;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                transition: all 0.3s ease;
+            }
+            .overlay-toggle.active {
+                background: #28a745;
+            }
+            .overlay-toggle.inactive {
+                background: #6c757d;
+            }
             @media (max-width: 1200px) {
                 .main-content {
                     flex-direction: column;
                 }
-                .stats-section {
+                .right-panel {
                     width: 100%;
+                    max-width: none;
+                    min-width: 0;
                     order: -1;
                 }
                 .video-section {
@@ -624,24 +766,51 @@ def index():
                     </div>
                 </div>
                 
-                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <button class="btn-primary" onclick="toggleOverlay()">Toggle AI Overlay</button>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                    <button id="overlayBtn" class="overlay-toggle active" onclick="toggleOverlay()">🎨 AI Overlay: ON</button>
+                    <button id="pauseBtn" class="btn-warning" onclick="togglePause()">⏸️ Pause</button>
                     <button class="btn-danger" onclick="stopServer()">Stop Server</button>
                     <button class="btn-success" onclick="refreshPage()">Refresh</button>
                 </div>
             </div>
             
             <div class="main-content">
-                <div class="stats-section">
-                    <div class="status-banner" id="statusBanner">
-                        🔴 Active Model: YOLOV8 (Most Capable)
+                <div class="video-section">
+                    <div class="video-container">
+                        <img src="/video_feed" alt="Live Video Feed">
                     </div>
-                    
-                    <div class="performance-stats" id="performanceStats">
-                        <div><strong>Performance Stats:</strong></div>
-                        <div>Processing Time: --</div>
-                        <div>Frame Size: --</div>
-                        <div>Status: Initializing...</div>
+                </div>
+                
+                <div class="right-panel">
+                    <div class="stats-section">
+                        <div class="status-banner" id="statusBanner">
+                            🔴 Active Model: YOLOV8 (Most Capable)
+                        </div>
+                        
+                        <div class="system-stats">
+                            <div class="system-stats-header">💻 System Resources</div>
+                            <div class="stats-row">
+                                <div class="stat-item">
+                                    <span class="stat-label">CPU</span>
+                                    <span class="stat-value" id="cpuUsage">--%</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">RAM</span>
+                                    <span class="stat-value" id="ramUsage">--%</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">GPU</span>
+                                    <span class="stat-value" id="gpuUsage">--%</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="performance-stats" id="performanceStats">
+                            <div><strong>Performance Stats:</strong></div>
+                            <div>Processing Time: --</div>
+                            <div>Frame Size: --</div>
+                            <div>Status: Initializing...</div>
+                        </div>
                     </div>
                     
                     <div class="terminal" id="terminal">
@@ -651,11 +820,12 @@ Detected Objects:
 AI Identified:
 - Initializing...
                     </div>
-                </div>
-                
-                <div class="video-section">
-                    <div class="video-container">
-                        <img src="/video_feed" alt="Live Video Feed">
+                    
+                    <div class="descriptions-section">
+                        <div class="descriptions-header">🤖 AI Scene Description</div>
+                        <div class="ai-description" id="aiDescription">
+                            Initializing AI vision analysis... Please wait for the first description to load.
+                        </div>
                     </div>
                 </div>
             </div>
@@ -707,8 +877,38 @@ AI Identified:
                 }).then(() => updateStatus());
             }
             
+            let overlayEnabled = true;
             function toggleOverlay() {
-                fetch('/toggle_overlay');
+                fetch('/toggle_overlay')
+                    .then(response => response.json())
+                    .then(data => {
+                        overlayEnabled = data.overlay;
+                        const btn = document.getElementById('overlayBtn');
+                        if (overlayEnabled) {
+                            btn.textContent = '🎨 AI Overlay: ON';
+                            btn.className = 'overlay-toggle active';
+                        } else {
+                            btn.textContent = '🎨 AI Overlay: OFF';
+                            btn.className = 'overlay-toggle inactive';
+                        }
+                    });
+            }
+            
+            let isPaused = false;
+            function togglePause() {
+                fetch('/toggle_pause')
+                    .then(response => response.json())
+                    .then(data => {
+                        isPaused = data.paused;
+                        const btn = document.getElementById('pauseBtn');
+                        if (isPaused) {
+                            btn.textContent = '▶️ Resume';
+                            btn.className = 'btn-resume';
+                        } else {
+                            btn.textContent = '⏸️ Pause';
+                            btn.className = 'btn-warning';
+                        }
+                    });
             }
             
             function stopServer() {
@@ -725,16 +925,18 @@ AI Identified:
                 fetch('/get_status')
                     .then(response => response.json())
                     .then(data => {
+                        const pauseStatus = data.paused ? ' (PAUSED)' : '';
                         document.getElementById('statusBanner').textContent = 
-                            `🔴 Active Model: ${data.model} (${data.capability})`;
+                            `🔴 Active Model: ${data.model} (${data.capability})${pauseStatus}`;
                         
                         // Update performance stats
+                        const status = data.paused ? 'PAUSED' : 'Active';
                         document.getElementById('performanceStats').innerHTML = 
                             `<div><strong>Performance Stats:</strong></div>
                             <div>Processing Time: ${data.processing_time}</div>
                             <div>Frame Size: ${data.frame_size}</div>
                             <div>Processing Rate: ${data.fps}</div>
-                            <div>Status: Active</div>`;
+                            <div>Status: ${status}</div>`;
                         
                         // Update dropdown selections to match current state
                         document.getElementById('detectionModel').value = data.model.toLowerCase();
@@ -759,6 +961,18 @@ AI Identified:
                             fpsSelect.value = options[0]; // Reset dropdown to first option
                             fpsInput.value = currentFps;
                         }
+                        
+                        // Sync pause button state
+                        const pauseBtn = document.getElementById('pauseBtn');
+                        if (data.paused) {
+                            pauseBtn.textContent = '▶️ Resume';
+                            pauseBtn.className = 'btn-resume';
+                            isPaused = true;
+                        } else {
+                            pauseBtn.textContent = '⏸️ Pause';
+                            pauseBtn.className = 'btn-warning';
+                            isPaused = false;
+                        }
                     })
                     .catch(() => {
                         document.getElementById('performanceStats').innerHTML = 
@@ -780,11 +994,38 @@ AI Identified:
                     .catch(() => {
                         document.getElementById('terminal').textContent = 'Error loading terminal data...';
                     });
+                
+                // Update AI description
+                fetch('/get_ai_description')
+                    .then(response => response.json())
+                    .then(data => {
+                        document.getElementById('aiDescription').textContent = data.description || 'No description available yet...';
+                    })
+                    .catch(() => {
+                        document.getElementById('aiDescription').textContent = 'Error loading AI description...';
+                    });
+                
                 updateStatus();
+                updateExtendedStats();
             }, 2000);
             
             // Initial status update
             updateStatus();
+            updateExtendedStats();
+            
+            function updateExtendedStats() {
+                // Get system stats
+                fetch('/get_system_stats')
+                    .then(response => response.json())
+                    .then(data => {
+                        document.getElementById('cpuUsage').textContent = data.cpu_usage || '--%';
+                        document.getElementById('ramUsage').textContent = data.ram_usage || '--%';
+                        document.getElementById('gpuUsage').textContent = data.gpu_usage || '--%';
+                    })
+                    .catch(() => {
+                        // Keep default values on error
+                    });
+            }
             
             // Make responsive adjustments
             window.addEventListener('resize', function() {
@@ -806,6 +1047,14 @@ def toggle_overlay():
     global show_overlay
     show_overlay = not show_overlay
     return {'overlay': show_overlay}
+
+@app.route('/toggle_pause')
+def toggle_pause():
+    global paused
+    paused = not paused
+    status = "PAUSED" if paused else "RESUMED"
+    print(f"Processing {status}")
+    return {'paused': paused}
 
 @app.route('/change_detection_mode', methods=['POST'])
 def change_detection_mode():
@@ -851,7 +1100,7 @@ def change_detection_model():
 
 @app.route('/get_status')
 def get_status():
-    global detection_model, detection_mode, current_processing_time, current_frame_size, processing_fps
+    global detection_model, detection_mode, current_processing_time, current_frame_size, processing_fps, paused
     
     # Get model capability description
     model_capabilities = {
@@ -866,8 +1115,14 @@ def get_status():
         'mode': detection_mode,
         'processing_time': f"{current_processing_time:.2f}s",
         'frame_size': f"{current_frame_size[0]}x{current_frame_size[1]}",
-        'fps': processing_fps
+        'fps': processing_fps,
+        'paused': paused
     }
+
+@app.route('/get_ai_description')
+def get_ai_description():
+    global current_description
+    return {'description': current_description or 'Initializing AI vision analysis...'}
 
 @app.route('/get_terminal_data')
 def get_terminal_data():
@@ -879,20 +1134,58 @@ def get_terminal_data():
     if not hasattr(get_terminal_data, 'correlated_objects'):
         get_terminal_data.correlated_objects = []
 
-    # Create three-column display
-    max_items = 8
-    lines = ["Detection".ljust(20) + "AI".ljust(15) + "Detection+AI"]
+    # Create three-column display with better formatting
+    lines = ["Detection".ljust(22) + "AI".ljust(16) + "Detection+AI"]
 
+    max_items = 8
     for i in range(max_items):
-        detection = get_terminal_data.detection_objects[i] if i < len(get_terminal_data.detection_objects) else ""
-        ai = get_terminal_data.ai_objects[i] if i < len(get_terminal_data.ai_objects) else ""
+        detection = (get_terminal_data.detection_objects[i] if i < len(get_terminal_data.detection_objects) else "").ljust(22)
+        ai = (get_terminal_data.ai_objects[i] if i < len(get_terminal_data.ai_objects) else "").ljust(16)
         correlated = get_terminal_data.correlated_objects[i] if i < len(get_terminal_data.correlated_objects) else ""
 
-        line = f"{detection[:18]:<20}{ai[:13]:<15}{correlated[:25]}"
+        # Truncate correlated if too long
+        if len(correlated) > 30:
+            correlated = correlated[:27] + "..."
+
+        line = f"{detection}{ai}{correlated}"
         lines.append(line)
 
     terminal_text = "\n".join(lines)
     return {'terminal': terminal_text}
+
+@app.route('/get_system_stats')
+def get_system_stats():
+    import psutil
+    
+    # CPU usage
+    cpu_usage = f"{psutil.cpu_percent(interval=0.1):.1f}%"
+    
+    # RAM usage
+    ram_usage = f"{psutil.virtual_memory().percent:.1f}%"
+    
+    # GPU usage (simplified - use CPU as placeholder on systems without GPU monitoring)
+    gpu_usage = '--'
+    try:
+        # Try to get GPU info if available (works on some systems)
+        import subprocess
+        import platform
+        if platform.system() == 'Darwin':  # macOS
+            # On M1/M2 Macs, GPU is integrated - show as active when processing
+            gpu_usage = 'Active' if processing else 'Idle'
+        else:
+            # Try nvidia-smi for NVIDIA GPUs
+            result = subprocess.run(['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'], 
+                                  capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                gpu_usage = f"{result.stdout.strip()}%"
+    except:
+        gpu_usage = 'N/A'
+    
+    return {
+        'cpu_usage': cpu_usage,
+        'ram_usage': ram_usage,
+        'gpu_usage': gpu_usage
+    }
 
 @app.route('/stop_server')
 def stop_server():
