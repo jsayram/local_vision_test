@@ -9,17 +9,6 @@ import signal
 import atexit
 from flask import Flask, Response, render_template, send_from_directory
 from detection_manager import DetectionManager
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
-
-try:
-    import sklearn.metrics.pairwise as pairwise
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    SKLEARN_AVAILABLE = False
 
 import numpy as np
 from collections import defaultdict, deque
@@ -47,7 +36,7 @@ show_overlay = True
 paused = False  # Pause/Resume control
 
 # Detection control (separate model and mode)
-detection_model = "yolov8"  # Options: "yolov8", "tensorflow", "opencv"
+detection_model = "yolov8"  # Options: "yolov8", "opencv"
 detection_mode = "all_detection"  # Options: "all_detection", "face_features", "face_expressions", "body_parts", "people", "general_objects", "none"
 
 # Processing FPS control
@@ -56,65 +45,6 @@ processing_fps = "1 FPS"  # Options: "1 FPS", "15 FPS", "1 FP 2 seconds", "1 FP 
 # Countdown tracking for UI - initialized to 0, will be set on first detection
 last_detection_time_global = 0  # Track globally for API access
 cached_detections_global = []  # Cache detection results globally between intervals
-
-class AdaptiveConfidenceScorer:
-    """Adaptive confidence scoring system that learns from historical correlations"""
-    def __init__(self):
-        self.match_history = defaultdict(list)  # Track historical correlations
-        self.semantic_model = None
-        
-    def initialize_model(self):
-        """Lazy initialization of semantic model"""
-        if self.semantic_model is None and SENTENCE_TRANSFORMERS_AVAILABLE:
-            try:
-                self.semantic_model = SentenceTransformer('all-MiniLM-L6-v2')
-            except Exception as e:
-                print(f"Warning: Could not load semantic model: {e}")
-                self.semantic_model = None
-    
-    def score_correlation(self, ai_obj, det_obj, match_type, semantic_sim=None):
-        """Calculate adaptive confidence score based on historical performance"""
-        key = (ai_obj.lower(), det_obj.lower())
-        
-        # Record this correlation
-        confidence_score = 1.0 if match_type == "ai_detection_match" else 0.5
-        self.match_history[key].append(confidence_score)
-        
-        # Keep only last 20 correlations for each pair
-        if len(self.match_history[key]) > 20:
-            self.match_history[key] = self.match_history[key][-20:]
-        
-        # Calculate historical average
-        historical_avg = sum(self.match_history[key]) / len(self.match_history[key])
-        
-        # Incorporate semantic similarity if available
-        if semantic_sim is not None:
-            # Blend historical and semantic scores
-            combined_score = (historical_avg * 0.7) + (semantic_sim * 0.3)
-        else:
-            combined_score = historical_avg
-            
-        return combined_score
-
-# Global adaptive scorer instance
-adaptive_scorer = AdaptiveConfidenceScorer()
-
-def cosine_similarity_manual(a, b):
-    """Cosine similarity calculation using sklearn if available, otherwise manual"""
-    if SKLEARN_AVAILABLE:
-        return pairwise.cosine_similarity(a, b)
-    else:
-        # Manual calculation
-        a = np.array(a)
-        b = np.array(b)
-        if a.ndim == 1:
-            a = a.reshape(1, -1)
-        if b.ndim == 1:
-            b = b.reshape(1, -1)
-        dot_product = np.dot(a, b.T)
-        norm_a = np.linalg.norm(a, axis=1)
-        norm_b = np.linalg.norm(b, axis=1)
-        return dot_product / (norm_a[:, np.newaxis] * norm_b)
 
 def extract_keywords_enhanced(description):
     """Enhanced keyword extraction from AI description"""
@@ -616,7 +546,7 @@ def change_detection_model():
     from flask import request
     data = request.get_json()
     new_model = data.get('model', 'yolov8')
-    if new_model in ['yolov8', 'tensorflow', 'opencv']:
+    if new_model in ['yolov8', 'opencv']:
         detection_model = new_model
         print(f"Detection model changed to: {detection_model}")
         return {'model': detection_model, 'success': True}
@@ -629,7 +559,6 @@ def get_status():
     # Get model capability description
     model_capabilities = {
         'yolov8': 'Most Capable',
-        'tensorflow': 'High Accuracy', 
         'opencv': 'Lightweight'
     }
     

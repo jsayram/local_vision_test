@@ -3,13 +3,11 @@ import threading
 
 # Import the separate detector classes
 from yolo_detector import YOLODetector
-from tensorflow_detector import TensorFlowDetector
 from opencv_detector import OpenCVDetector
 
 class DetectionManager:
     def __init__(self):
         self.yolo_detector = None
-        self.tf_detector = None
         self.opencv_detector = None
         self._lock = threading.Lock()  # Thread safety for model switching
         self.initialize_detectors()
@@ -18,9 +16,6 @@ class DetectionManager:
         """Initialize all detectors"""
         # Initialize YOLO detector
         self.yolo_detector = YOLODetector()
-
-        # Initialize TensorFlow detector (lazy loading)
-        self.tf_detector = TensorFlowDetector()
 
         # Initialize OpenCV detector
         self.opencv_detector = OpenCVDetector()
@@ -37,9 +32,6 @@ class DetectionManager:
             try:
                 if model == "yolov8" and self.yolo_detector and self.yolo_detector.detector:
                     detections = self.yolo_detector.detect(frame, mode)
-                elif model == "tensorflow" and self.tf_detector:
-                    # detect() handles lazy init and returns empty list if unavailable
-                    detections = self.tf_detector.detect(frame, mode)
                 elif model == "opencv" and self.opencv_detector:
                     detections = self.opencv_detector.detect(frame, mode)
             except Exception as e:
