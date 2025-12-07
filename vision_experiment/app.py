@@ -3,6 +3,7 @@
 LIVING PORTRAIT - Integrated Flask Web Application
 Combines the original vision detection system with the new Living Portrait features
 Side-by-side display: Camera Feed + Portrait Animation
+Now with voice interaction, face recognition, and chat!
 """
 
 import cv2
@@ -15,23 +16,35 @@ import platform
 import signal
 import atexit
 import numpy as np
+import uuid
 from queue import Queue, Empty
 from collections import defaultdict, deque
 from typing import Optional, List
 from datetime import datetime
 from flask import Flask, Response, render_template, jsonify, send_from_directory
+from flask_socketio import SocketIO, emit
 
 # Import detection manager (original system)
 from detectors.detection_manager import DetectionManager
 
 # Import portrait system modules
 from core import config
-from models.models import Event, EventType, PersonState, AnimationState, MoondreamContext
+from models.models import (
+    Event, EventType, PersonState, AnimationState, MoondreamContext,
+    VoiceSettings, ChatMessage, FaceRecognitionResult
+)
 from core import storage
 from core import moondream_client
 from core import detector
 from core import animator
 from detectors.yolo_detector import YOLODetector
+
+# Import new feature modules
+from core.face_recognition_manager import FaceRecognitionManager
+from core.wake_word_listener import create_wake_word_listener
+from core.voice_manager import create_voice_manager
+from core.stream_manager import StreamManager
+from core.chat_manager import ChatManager, CommandParser
 
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -39,6 +52,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, 
             template_folder=os.path.join(SCRIPT_DIR, 'templates'),
             static_folder=os.path.join(SCRIPT_DIR, 'static'))
+app.config['SECRET_KEY'] = 'living-portrait-secret-key-2025'
+
+# Initialize SocketIO
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # ============================================================================
 # GLOBAL STATE - Original System
@@ -94,27 +111,89 @@ portrait_subtitle = "Waiting for someone to appear..."
 portrait_subtitle_lock = threading.Lock()
 
 # ============================================================================
+# NEW FEATURE MANAGERS
+# ============================================================================
+
+# Face recognition
+face_recognition_manager = FaceRecognitionManager()
+
+# Voice settings
+voice_settings = VoiceSettings()
+voice_manager = create_voice_manager(voice_settings, use_stub=True)  # Start with stub
+wake_word_listener = None  # Initialize later
+
+# Chat manager
+chat_manager = ChatManager()
+
+# Stream manager for word-by-word responses
+stream_manager = StreamManager(words_per_second=5.0)
+
+# Current person being interacted with
+current_person_id = None
+pending_face_confirmation = None  # Stores FaceRecognitionResult awaiting confirmation
+
+# ============================================================================
 # CAMERA CLEANUP
 # ============================================================================
 
-def cleanup_camera():
-    """Ensure camera is properly released on exit"""
-    global cap
+def cleanup_all():
+    """Comprehensive cleanup of all system components"""
+    global cap, server_running, wake_word_listener
+    
+    print("\n[Cleanup] Shutting down Living Portrait System...")
+    server_running = False
+    
+    # Stop wake word listener
+    if wake_word_listener:
+        try:
+            wake_word_listener.stop()
+            print("[Cleanup] Wake word listener stopped")
+        except Exception as e:
+            print(f"[Cleanup] Error stopping wake word: {e}")
+    
+    # Stop voice manager
+    if voice_manager:
+        try:
+            voice_manager.shutdown()
+            print("[Cleanup] Voice manager stopped")
+        except Exception as e:
+            print(f"[Cleanup] Error stopping voice: {e}")
+    
+    # Stop stream manager
+    if stream_manager:
+        try:
+            stream_manager.stop()
+            print("[Cleanup] Stream manager stopped")
+        except Exception as e:
+            print(f"[Cleanup] Error stopping stream: {e}")
+    
+    # Release camera
     if cap is not None:
-        if cap.isOpened():
-            cap.release()
-            print("Camera released during cleanup")
+        try:
+            if cap.isOpened():
+                cap.release()
+                print("[Cleanup] Camera released")
+        except Exception as e:
+            print(f"[Cleanup] Error releasing camera: {e}")
         cap = None
+    
+    print("[Cleanup] Shutdown complete")
 
-atexit.register(cleanup_camera)
+def cleanup_camera():
+    """Legacy cleanup function for atexit"""
+    global cap
+    if cap is not None and cap.isOpened():
+        cap.release()
+
+atexit.register(cleanup_all)
 
 def signal_handler(signum, frame):
     """Handle interrupt signals to ensure clean shutdown"""
     global server_running
-    print(f"\nReceived signal {signum}, shutting down gracefully...")
+    print(f"\n[Signal] Received signal {signum}, shutting down...")
     server_running = False
-    cleanup_camera()
-    exit(0)
+    cleanup_all()
+    os._exit(0)  # Force exit immediately
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
@@ -275,33 +354,60 @@ def process_frame(frame, timestamp, detections=None):
 
 def moondream_worker():
     """Background worker that processes Moondream vision-language calls"""
-    global animation_state, portrait_subtitle
+    global animation_state, portrait_subtitle, current_person_id
     print("[Moondream Worker] Started")
+    
+    def on_stream_chunk(chunk):
+        """Callback for streaming chunks"""
+        socketio.emit('stream_chunk', {
+            'text': chunk.text,
+            'is_complete': chunk.is_complete,
+            'metadata': chunk.metadata
+        })
+    
+    # Start stream manager with callback
+    stream_manager.on_chunk = on_stream_chunk
+    stream_manager.start()
     
     while server_running:
         try:
+            # Expecting tuple: (event, context, face_img)
             job = moondream_queue.get(timeout=1.0)
             
-            event_type = job["event_type"]
-            face_img = job["face_img"]
-            person_id = job.get("person_id", "unknown")
+            if isinstance(job, dict):
+                # Old format compatibility
+                event_type = job["event_type"]
+                face_img = job["face_img"]
+                person_id = job.get("person_id", "unknown")
+                
+                # Convert to new format
+                context = MoondreamContext(
+                    event_type=event_type.name,
+                    person_id=person_id if person_id != "unknown" else None
+                )
+            else:
+                # New format: (event, context, face_img)
+                event, context, face_img = job
+                event_type = event.event_type
+                person_id = context.person_id or "unknown"
             
             print(f"[Moondream Worker] Processing {event_type.name} event for person {person_id}")
             
-            # Load recent interactions if person is known
-            recent_interactions = []
-            if person_id != "unknown" and person_id in people:
-                person_data = people[person_id]
-                recent_interactions = person_data.get("interactions", [])[-5:]  # Last 5
-            
-            context = MoondreamContext(
-                event_type=event_type.name,
-                person_id=person_id if person_id != "unknown" else None,
-                recent_interactions=recent_interactions
-            )
+            # Show typing indicator
+            socketio.emit('typing_indicator', {'is_typing': True})
             
             # Use the wrapper which handles stub fallback properly
             result = moondream_client.call_moondream(face_img, context, use_stub=True)
+            
+            # Hide typing indicator
+            socketio.emit('typing_indicator', {'is_typing': False})
+            
+            # Stream the response word-by-word
+            stream_id = str(uuid.uuid4())
+            stream_manager.stream_text(result.text, stream_id, result.mood, {
+                'person_id': person_id,
+                'event_type': event_type.name
+            })
             
             # Update animation state
             with animation_state_lock:
@@ -312,6 +418,32 @@ def moondream_worker():
             # Update portrait subtitle
             with portrait_subtitle_lock:
                 portrait_subtitle = result.text
+            
+            # Add portrait message to chat
+            if person_id != "unknown":
+                chat_manager.add_portrait_message(
+                    person_id if isinstance(person_id, int) else None,
+                    result.text,
+                    result.mood,
+                    is_voice=False
+                )
+            
+            # Send complete message to chat
+            socketio.emit('chat_message', {
+                'speaker': 'portrait',
+                'text': result.text,
+                'mood': result.mood,
+                'is_voice': False,
+                'timestamp': datetime.now().isoformat(),
+                'message_id': str(uuid.uuid4())
+            })
+            
+            # Emit stream complete
+            socketio.emit('stream_complete', {
+                'stream_id': stream_id,
+                'full_text': result.text,
+                'mood': result.mood
+            })
             
             # Save interaction with proper format
             interaction = {
@@ -329,7 +461,7 @@ def moondream_worker():
             print(f"  Person ID: {person_id}")
             print(f"  Portrait Says: {result.text}")
             print(f"  Portrait Mood: {result.mood}")
-            print(f"  Animation State: mood={animation_state.mood}, speaking={animation_state.speaking}")
+            print(f"  Stream ID: {stream_id}")
             if event_type.name == "PERIODIC_UPDATE":
                 print(f"  ⏰ Next periodic update in ~{config.PERIODIC_UPDATE_INTERVAL}s")
             print(f"{'='*60}\n")
@@ -340,6 +472,9 @@ def moondream_worker():
             continue
         except Exception as e:
             print(f"[Moondream Worker] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            socketio.emit('typing_indicator', {'is_typing': False})
             if not moondream_queue.empty():
                 moondream_queue.task_done()
 
@@ -435,10 +570,211 @@ def toggle_pause():
 
 @app.route('/stop_server')
 def stop_server():
-    global server_running
-    server_running = False
-    time.sleep(0.5)
-    cleanup_camera()
+    """Stop the server gracefully"""
+    def shutdown():
+        time.sleep(0.5)
+        cleanup_all()
+        os._exit(0)
+    
+    threading.Thread(target=shutdown, daemon=True).start()
+    return jsonify({'status': 'Server shutting down...'})
+
+# ============================================================================
+# SOCKETIO EVENT HANDLERS
+# ============================================================================
+
+@socketio.on('connect')
+def handle_connect():
+    """Client connected"""
+    print(f"[SocketIO] Client connected")
+    emit('connected', {'status': 'Connected to Living Portrait'})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Client disconnected"""
+    print(f"[SocketIO] Client disconnected")
+
+@socketio.on('send_chat_message')
+def handle_chat_message(data):
+    """
+    Handle incoming chat message (text or voice)
+    data: {text: str, person_id: int|None, is_voice: bool}
+    """
+    global current_person_id, moondream_queue
+    
+    text = data.get('text', '').strip()
+    is_voice = data.get('is_voice', False)
+    person_id = data.get('person_id') or current_person_id
+    
+    if not text:
+        return
+    
+    print(f"[Chat] Received {'voice' if is_voice else 'text'} message: {text}")
+    
+    # Check for special commands
+    command = CommandParser.parse_command(text)
+    if command:
+        handle_command(command, person_id)
+        return
+    
+    # Add user message to chat history
+    chat_manager.add_user_message(person_id, text, is_voice)
+    
+    # Send to client for display
+    emit('chat_message', {
+        'speaker': 'user',
+        'text': text,
+        'is_voice': is_voice,
+        'timestamp': datetime.now().isoformat(),
+        'message_id': str(uuid.uuid4())
+    })
+    
+    # Queue Moondream response with user message
+    with person_state_lock:
+        current_state = PersonState(
+            person_id=person_id,
+            name=storage.get_person_name(person_id) if person_id else None
+        )
+    
+    context = MoondreamContext(
+        person_id=person_id,
+        name=current_state.name,
+        recent_interactions=storage.get_recent_interactions(person_id, count=5),
+        event_type=EventType.VOICE_MESSAGE.value if is_voice else EventType.CHAT_MESSAGE.value,
+        user_message=text
+    )
+    
+    event = Event(
+        event_type=EventType.VOICE_MESSAGE if is_voice else EventType.CHAT_MESSAGE,
+        timestamp=time.time(),
+        person_state=current_state,
+        description=f"User {'said' if is_voice else 'typed'}: {text}"
+    )
+    
+    try:
+        moondream_queue.put((event, context, None), block=False)
+    except:
+        print("[Chat] Moondream queue full, skipping")
+
+def handle_command(command, person_id):
+    """Handle special chat commands"""
+    cmd_type = command['command']
+    
+    if cmd_type == 'forget_last':
+        deleted = chat_manager.delete_last_exchange(person_id)
+        socketio.emit('forget_command', {
+            'deleted_count': deleted,
+            'message': f"Forgot last exchange ({deleted} messages)"
+        })
+        
+        # Portrait acknowledges
+        if voice_manager:
+            voice_manager.speak("Okay, I've forgotten that.", use_buffer=False)
+    
+    elif cmd_type == 'clear_conversation':
+        chat_manager.clear_conversation(person_id)
+        socketio.emit('chat_cleared', {'message': 'Conversation cleared'})
+        
+        if voice_manager:
+            voice_manager.speak("Starting fresh!", use_buffer=False)
+
+@socketio.on('start_wake_word')
+def handle_start_wake_word():
+    """Start wake word listening"""
+    global wake_word_listener
+    
+    if wake_word_listener is None:
+        wake_word_listener = create_wake_word_listener(
+            wake_word=voice_settings.wake_word,
+            sensitivity=voice_settings.wake_word_threshold,
+            on_wake_word=on_wake_word_detected,
+            use_stub=True  # Use stub for now
+        )
+    
+    if wake_word_listener.start():
+        print("[Wake Word] Started listening")
+        emit('wake_word_status', {'active': True})
+        socketio.emit('voice_detection_update', {'listening': True, 'status': 'Listening for wake word'})
+    else:
+        emit('wake_word_status', {'active': False, 'error': 'Failed to start'})
+        socketio.emit('voice_detection_update', {'listening': False, 'status': 'Failed to start'})
+
+@socketio.on('stop_wake_word')
+def handle_stop_wake_word():
+    """Stop wake word listening"""
+    global wake_word_listener
+    
+    if wake_word_listener:
+        wake_word_listener.stop()
+        print("[Wake Word] Stopped listening")
+    
+    emit('wake_word_status', {'active': False})
+    socketio.emit('voice_detection_update', {'listening': False, 'status': 'Stopped'})
+
+def on_wake_word_detected():
+    """Callback when wake word is detected"""
+    print("[Wake Word] Detected!")
+    socketio.emit('wake_word_detected', {})
+    socketio.emit('voice_detection_update', {'listening': True, 'status': 'Wake word detected!', 'triggered': True})
+
+@socketio.on('face_confirmation')
+def handle_face_confirmation(data):
+    """
+    Handle user response to face recognition confirmation
+    data: {confirmed: bool|None}  (None = timeout)
+    """
+    global pending_face_confirmation, current_person_id
+    
+    confirmed = data.get('confirmed')
+    
+    if pending_face_confirmation is None:
+        print("[Face] No pending confirmation")
+        return
+    
+    face_result = pending_face_confirmation
+    pending_face_confirmation = None
+    
+    if confirmed is True:
+        # User confirmed - register face
+        print(f"[Face] Confirmed: {face_result.name}")
+        current_person_id = face_result.person_id
+        
+        # Update person state
+        with person_state_lock:
+            person_state.person_id = face_result.person_id
+            person_state.name = face_result.name
+            person_state.face_recognition_confidence = face_result.confidence
+        
+        socketio.emit('person_identified', {
+            'person_id': face_result.person_id,
+            'name': face_result.name
+        })
+        
+        if voice_manager:
+            voice_manager.speak(f"Hello {face_result.name}! Good to see you.", use_buffer=False)
+    
+    elif confirmed is False:
+        # User rejected - this is NOT the person
+        print(f"[Face] Rejected match for {face_result.name}")
+        if voice_manager:
+            voice_manager.speak("Sorry about that. Who are you?", use_buffer=False)
+    
+    else:
+        # Timeout - no response
+        print("[Face] Confirmation timeout")
+        if voice_manager:
+            voice_manager.speak("Okay then, don't tell me. I'll keep it to yourself, I'll still talk.", use_buffer=False)
+
+@socketio.on('tts_speak')
+def handle_tts_speak(data):
+    """
+    Speak text via TTS
+    data: {text: str}
+    """
+    text = data.get('text', '').strip()
+    if text and voice_manager:
+        voice_manager.speak(text, use_buffer=False)
+        socketio.emit('tts_started', {})
     return jsonify({'success': True, 'message': 'Server stopped'})
 
 @app.route('/get_ai_description')
@@ -560,6 +896,15 @@ def generate_camera_frames():
                 
                 cached_detections_global = filtered_detections
                 last_detection_time_global = current_time
+                
+                # Emit detection update to frontend
+                people_count = sum(1 for d in filtered_detections if d.get('label') == 'person')
+                object_count = len(filtered_detections)
+                socketio.emit('detection_update', {
+                    'people_count': people_count,
+                    'object_count': object_count,
+                    'detections': [f"{d['label']} ({d['confidence']:.0%})" for d in filtered_detections]
+                })
                 
                 # Also run YOLO for portrait system (only detects people)
                 try:
@@ -782,6 +1127,11 @@ def main():
     print(f"  • POSE_CHANGED: IoU < {config.POSE_CHANGE_THRESHOLD} (movement detection)")
     print(f"  • PERIODIC_UPDATE: Every {config.PERIODIC_UPDATE_INTERVAL}s while person present")
     print(f"  • Min interval between calls: {config.MOONDREAM_MIN_INTERVAL}s")
+    print("\nNew Features:")
+    print(f"  • Face Recognition: {face_recognition_manager.is_available()}")
+    print(f"  • Voice (TTS): {voice_manager.is_available()}")
+    print(f"  • Chat: Enabled")
+    print(f"  • Streaming: Enabled")
     print("\nPress Ctrl+C to stop")
     print("="*60 + "\n")
     
@@ -790,8 +1140,8 @@ def main():
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.WARNING)
     
-    # Start Flask app
-    app.run(host='0.0.0.0', port=8000, debug=False, threaded=True)
+    # Start Flask-SocketIO app
+    socketio.run(app, host='0.0.0.0', port=8000, debug=False, allow_unsafe_werkzeug=True)
 
 if __name__ == "__main__":
     main()

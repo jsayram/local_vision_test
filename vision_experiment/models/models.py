@@ -63,6 +63,8 @@ class PersonState:
     last_seen: float = 0.0  # Timestamp when last detected
     last_moondream_call: float = 0.0  # Timestamp of last Moondream call
     frame_count: int = 0  # Number of consecutive frames with this person
+    face_recognition_confidence: float = 0.0  # Face recognition confidence (0.0-1.0)
+    pending_face_confirmation: bool = False  # Awaiting user confirmation for face match
     
     def is_present(self) -> bool:
         """Check if person is currently present"""
@@ -109,6 +111,10 @@ class EventType(Enum):
     POSE_CHANGED = "POSE_CHANGED"  # Significant movement/pose change
     PERIODIC_UPDATE = "PERIODIC_UPDATE"  # Time-based check-in
     MANUAL_TRIGGER = "MANUAL_TRIGGER"  # User-requested
+    CHAT_MESSAGE = "CHAT_MESSAGE"  # User sent a text chat message
+    VOICE_MESSAGE = "VOICE_MESSAGE"  # User sent a voice message
+    FACE_CONFIRMED = "FACE_CONFIRMED"  # Face recognition confirmed by user
+    FACE_DENIED = "FACE_DENIED"  # Face recognition rejected by user
 
 
 @dataclass
@@ -132,6 +138,7 @@ class MoondreamContext:
     recent_interactions: List[Dict[str, Any]] = field(default_factory=list)
     event_type: str = "UNKNOWN"
     system_prompt: str = ""
+    user_message: Optional[str] = None  # Text from chat or voice input
     
     def build_prompt(self, image_description: str = "") -> str:
         """Build the full prompt for Moondream"""
@@ -159,6 +166,10 @@ class MoondreamContext:
         
         # Add event context
         parts.append(f"\nEvent: {self.event_type}")
+        
+        # Add user's message if provided (chat or voice input)
+        if self.user_message:
+            parts.append(f"\nUser says: {self.user_message}")
         
         # Add image description if provided
         if image_description:
@@ -325,6 +336,220 @@ class Interaction:
             mood=mood,
             text=text,
             event_type=event_type
+        )
+
+
+# ============================================================================
+# FACE RECOGNITION
+# ============================================================================
+
+class InteractionMode(Enum):
+    """How the user can interact with the portrait"""
+    VOICE_ONLY = "VOICE_ONLY"  # Voice interaction enabled
+    CHAT_ONLY = "CHAT_ONLY"  # Text chat enabled
+    VOICE_AND_CHAT = "VOICE_AND_CHAT"  # Both enabled
+
+
+@dataclass
+class FaceRecognitionResult:
+    """Result from face recognition attempt"""
+    person_id: Optional[int] = None  # Matched person ID (if any)
+    name: Optional[str] = None  # Matched person name (if any)
+    confidence: float = 0.0  # Confidence score (0.0-1.0)
+    needs_confirmation: bool = False  # True if below auto-accept threshold
+    face_encoding: Optional[List[float]] = None  # Face encoding for storage
+    bbox: Optional[tuple[int, int, int, int]] = None  # Face location
+    
+    def is_confident_match(self, threshold: float = 0.7) -> bool:
+        """Check if confidence exceeds auto-accept threshold"""
+        return self.confidence >= threshold and self.person_id is not None
+    
+    def is_unknown(self) -> bool:
+        """Check if this is an unknown face"""
+        return self.person_id is None
+
+
+# ============================================================================
+# CONVERSATION & CHAT
+# ============================================================================
+
+@dataclass
+class ChatMessage:
+    """Single message in a conversation"""
+    message_id: str  # Unique ID for this message
+    speaker: str  # "user" or "portrait"
+    text: str  # Message content
+    timestamp: str  # ISO datetime string
+    is_voice: bool = False  # True if spoken, False if typed
+    mood: Optional[str] = None  # Portrait mood (portrait messages only)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON storage"""
+        return {
+            'message_id': self.message_id,
+            'speaker': self.speaker,
+            'text': self.text,
+            'timestamp': self.timestamp,
+            'is_voice': self.is_voice,
+            'mood': self.mood
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ChatMessage':
+        """Create from dictionary (loaded from JSON)"""
+        return cls(
+            message_id=data['message_id'],
+            speaker=data['speaker'],
+            text=data['text'],
+            timestamp=data['timestamp'],
+            is_voice=data.get('is_voice', False),
+            mood=data.get('mood')
+        )
+    
+    @classmethod
+    def create_user_message(cls, text: str, is_voice: bool = False) -> 'ChatMessage':
+        """Create a new user message with auto-generated ID and timestamp"""
+        import uuid
+        return cls(
+            message_id=str(uuid.uuid4()),
+            speaker='user',
+            text=text,
+            timestamp=datetime.now().isoformat(),
+            is_voice=is_voice
+        )
+    
+    @classmethod
+    def create_portrait_message(cls, text: str, mood: str = 'idle', 
+                                is_voice: bool = False) -> 'ChatMessage':
+        """Create a new portrait message with auto-generated ID and timestamp"""
+        import uuid
+        return cls(
+            message_id=str(uuid.uuid4()),
+            speaker='portrait',
+            text=text,
+            timestamp=datetime.now().isoformat(),
+            is_voice=is_voice,
+            mood=mood
+        )
+
+
+@dataclass
+class PersonConversation:
+    """Conversation thread for a specific person"""
+    person_id: Optional[int]  # None for unknown person
+    messages: List[ChatMessage] = field(default_factory=list)
+    max_messages: int = 50  # Maximum messages before archiving
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    last_updated: str = field(default_factory=lambda: datetime.now().isoformat())
+    
+    def add_message(self, message: ChatMessage):
+        """Add a message to the conversation"""
+        self.messages.append(message)
+        self.last_updated = datetime.now().isoformat()
+        
+        # Archive old messages if limit exceeded
+        if len(self.messages) > self.max_messages:
+            self._archive_old_messages()
+    
+    def _archive_old_messages(self):
+        """Move old messages to archive, keeping only recent ones"""
+        # Keep most recent max_messages
+        archived = self.messages[:-self.max_messages]
+        self.messages = self.messages[-self.max_messages:]
+        # TODO: Save archived messages to separate file
+        return archived
+    
+    def get_recent_messages(self, count: int = 10) -> List[ChatMessage]:
+        """Get the most recent N messages"""
+        return self.messages[-count:] if self.messages else []
+    
+    def delete_message(self, message_id: str) -> bool:
+        """Delete a specific message (for 'forget that' command)"""
+        for i, msg in enumerate(self.messages):
+            if msg.message_id == message_id:
+                del self.messages[i]
+                self.last_updated = datetime.now().isoformat()
+                return True
+        return False
+    
+    def delete_last_exchange(self) -> int:
+        """Delete the last user message and portrait response (for 'forget that')"""
+        deleted_count = 0
+        # Remove last portrait message if it exists
+        if self.messages and self.messages[-1].speaker == 'portrait':
+            self.messages.pop()
+            deleted_count += 1
+        # Remove last user message if it exists
+        if self.messages and self.messages[-1].speaker == 'user':
+            self.messages.pop()
+            deleted_count += 1
+        if deleted_count > 0:
+            self.last_updated = datetime.now().isoformat()
+        return deleted_count
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON storage"""
+        return {
+            'person_id': self.person_id,
+            'messages': [msg.to_dict() for msg in self.messages],
+            'max_messages': self.max_messages,
+            'created_at': self.created_at,
+            'last_updated': self.last_updated
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'PersonConversation':
+        """Create from dictionary (loaded from JSON)"""
+        return cls(
+            person_id=data.get('person_id'),
+            messages=[ChatMessage.from_dict(msg) for msg in data.get('messages', [])],
+            max_messages=data.get('max_messages', 50),
+            created_at=data.get('created_at', datetime.now().isoformat()),
+            last_updated=data.get('last_updated', datetime.now().isoformat())
+        )
+
+
+# ============================================================================
+# VOICE SETTINGS
+# ============================================================================
+
+@dataclass
+class VoiceSettings:
+    """Configuration for voice interaction"""
+    wake_word: str = "hey portrait"  # Wake word to activate voice input
+    wake_word_threshold: float = 0.5  # Sensitivity (0.0-1.0)
+    tts_voice: Optional[str] = None  # TTS voice name (None = default)
+    tts_rate: int = 150  # Words per minute
+    tts_volume: float = 0.9  # Volume (0.0-1.0)
+    confirmation_timeout: int = 30  # Seconds to wait for face confirmation
+    chime_on_wake: bool = True  # Play sound when wake word detected
+    punctuation_buffer: bool = True  # Wait for punctuation before TTS
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON storage"""
+        return {
+            'wake_word': self.wake_word,
+            'wake_word_threshold': self.wake_word_threshold,
+            'tts_voice': self.tts_voice,
+            'tts_rate': self.tts_rate,
+            'tts_volume': self.tts_volume,
+            'confirmation_timeout': self.confirmation_timeout,
+            'chime_on_wake': self.chime_on_wake,
+            'punctuation_buffer': self.punctuation_buffer
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'VoiceSettings':
+        """Create from dictionary (loaded from JSON)"""
+        return cls(
+            wake_word=data.get('wake_word', 'hey portrait'),
+            wake_word_threshold=data.get('wake_word_threshold', 0.5),
+            tts_voice=data.get('tts_voice'),
+            tts_rate=data.get('tts_rate', 150),
+            tts_volume=data.get('tts_volume', 0.9),
+            confirmation_timeout=data.get('confirmation_timeout', 30),
+            chime_on_wake=data.get('chime_on_wake', True),
+            punctuation_buffer=data.get('punctuation_buffer', True)
         )
 
 

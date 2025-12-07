@@ -3,131 +3,210 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Living Portrait</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-        }
-        .video-container {
-            aspect-ratio: 4/3;
-            background: #000;
-        }
-        .subtitle-box {
-            background: rgba(0, 0, 0, 0.8);
-            backdrop-filter: blur(10px);
-        }
-        .reference-section {
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-    </style>
+    <title>Living Portrait - Interactive AI</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 </head>
-<body class="text-white">
-    <!-- Header -->
-    <div class="container mx-auto px-4 py-6">
-        <div class="flex items-center justify-between flex-wrap gap-4">
-            <div>
-                <h1 class="text-4xl font-bold">Living Portrait</h1>
-                <p class="text-purple-200 mt-1">An AI-powered interactive portrait</p>
-            </div>
-            <div class="flex items-center gap-4">
-                <span id="platform-indicator" class="px-3 py-1 bg-purple-900 rounded-full text-sm">
-                    Loading...
-                </span>
-                <button id="pause-btn" class="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 rounded-lg font-medium text-gray-900 transition">
-                    Pause
-                </button>
-                <button id="refresh-btn" class="px-4 py-2 bg-blue-500 hover:bg-blue-600 rounded-lg font-medium transition">
-                    Refresh
-                </button>
-                <button id="stop-btn" class="px-4 py-2 bg-red-500 hover:bg-red-600 rounded-lg font-medium transition">
-                    Stop
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Main Content -->
-    <div class="container mx-auto px-4">
-        <!-- Side-by-side Video Feeds -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-            <!-- Camera Feed -->
-            <div class="bg-white bg-opacity-10 rounded-xl p-4 backdrop-blur-lg">
-                <h2 class="text-xl font-semibold mb-3">Camera Feed</h2>
-                <div class="video-container rounded-lg overflow-hidden">
-                    <img id="camera-feed" src="/video_feed" class="w-full h-full object-contain">
+<body>
+    <!-- Main Container -->
+    <div class="container">
+        <!-- Header (Full Width) -->
+        <header class="header">
+            <h1>
+                <span>🎨</span>
+                Living Portrait
+            </h1>
+            <div class="header-controls">
+                <div class="voice-controls">
+                    <button id="wake-word-toggle">
+                        <span>🎤</span>
+                        <span>Wake Word</span>
+                    </button>
+                    <div id="mic-icon"></div>
+                    <div class="voice-status" id="voice-status"></div>
                 </div>
             </div>
+        </header>
 
-            <!-- Portrait Animation -->
-            <div class="bg-white bg-opacity-10 rounded-xl p-4 backdrop-blur-lg">
-                <h2 class="text-xl font-semibold mb-3">Portrait Animation</h2>
-                <div class="video-container rounded-lg overflow-hidden">
-                    <img id="animation-feed" src="/animation_feed" class="w-full h-full object-contain">
+        <!-- Chat Panel (Left Column) -->
+        <section class="chat-panel">
+            <div class="chat-header">
+                <h2>💬 Conversation</h2>
+            </div>
+            
+            <div class="chat-messages" id="chat-messages">
+                <!-- Messages will be added here dynamically -->
+            </div>
+            
+            <div class="chat-input-container">
+                <div class="chat-input-wrapper">
+                    <textarea 
+                        id="chat-input" 
+                        placeholder="Type a message..."
+                        rows="2"
+                    ></textarea>
+                    <button id="send-button">Send</button>
+                </div>
+                <div class="chat-status" id="chat-status"></div>
+            </div>
+        </section>
+
+        <!-- Portrait Panel (Center Column) -->
+        <section class="portrait-panel">
+            <div class="portrait-header">
+                <div class="portrait-title">
+                    <h2>Portrait Response</h2>
+                    <span class="badge badge-portrait">LIVE</span>
                 </div>
             </div>
-        </div>
-
-        <!-- Portrait Says (Subtitle) -->
-        <div class="bg-white bg-opacity-10 rounded-xl p-6 backdrop-blur-lg mb-6">
-            <h2 class="text-2xl font-semibold mb-3 flex items-center">
-                <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path>
-                </svg>
-                <span class="text-xs bg-green-600 px-2 py-1 rounded mr-2">PORTRAIT</span>
-                Portrait Response
-            </h2>
-            <div class="subtitle-box rounded-lg p-4">
-                <p id="portrait-subtitle" class="text-lg leading-relaxed">
-                    Waiting for someone to appear...
-                </p>
+            
+            <div class="portrait-video-container">
+                <img id="portrait-feed" src="/animation_feed" alt="Portrait Animation">
+                
+                <!-- Streaming Text Overlay -->
+                <div class="stream-overlay" id="stream-output">
+                    <div class="stream-text"></div>
+                    <div class="stream-mood"></div>
+                </div>
             </div>
-        </div>
+        </section>
 
-        <!-- Reference Sections -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-            <!-- YOLO Detection Results -->
-            <div class="reference-section rounded-xl p-4">
-                <h3 class="text-lg font-semibold mb-3 text-purple-200">
-                    <span class="text-xs bg-purple-700 px-2 py-1 rounded mr-2">REFERENCE</span>
-                    YOLO Detection Results
-                </h3>
-                <div class="space-y-2">
-                    <div class="text-sm">
-                        <span class="text-purple-300">Count:</span>
-                        <span id="detection-count" class="ml-2 font-mono">0</span>
+        <!-- Camera Panel (Right Column) -->
+        <section class="camera-panel">
+            <div class="camera-header">
+                <h2>Scene View</h2>
+                <span class="badge badge-reference">REFERENCE</span>
+            </div>
+            
+            <div class="camera-video-container">
+                <div class="video-wrapper">
+                    <img id="camera-feed" src="/video_feed" alt="Camera Feed">
+                </div>
+                
+                <div class="camera-info">
+                    <h3>Detection Info</h3>
+                    <div class="info-item">
+                        <span class="info-label">Objects Detected:</span>
+                        <span class="info-value" id="object-count">0</span>
                     </div>
-                    <div class="max-h-32 overflow-y-auto">
-                        <ul id="detection-list" class="text-sm space-y-1 text-gray-300">
-                            <li>No detections yet</li>
-                        </ul>
+                    <div class="info-item">
+                        <span class="info-label">People:</span>
+                        <span class="info-value" id="people-count">0</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Status:</span>
+                        <span class="info-value" id="detection-status">Active</span>
+                    </div>
+                </div>
+                
+                <div class="camera-info">
+                    <h3>Voice Detection</h3>
+                    <div class="info-item">
+                        <span class="info-label">Wake Word:</span>
+                        <span class="info-value" id="wake-word-status">Inactive</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Status:</span>
+                        <span class="info-value" id="voice-status-text">Not listening</span>
                     </div>
                 </div>
             </div>
+        </section>
+    </div>
 
-            <!-- Scene Description -->
-            <div class="reference-section rounded-xl p-4">
-                <h3 class="text-lg font-semibold mb-3 text-purple-200">
-                    <span class="text-xs bg-blue-700 px-2 py-1 rounded mr-2">REFERENCE</span>
-                    Scene Description (Moondream)
-                </h3>
-                <div class="text-sm">
-                    <p id="ai-description" class="text-gray-300 leading-relaxed">
-                        Waiting for AI analysis...
-                    </p>
-                </div>
+    <!-- Confirmation Modal -->
+    <div id="confirmation-modal">
+        <div class="modal-content">
+            <h3>Face Recognition</h3>
+            <p id="confirmation-message">Is this the person?</p>
+            <div class="modal-buttons">
+                <button id="confirm-yes">Yes, that's correct</button>
+                <button id="confirm-no">No, wrong person</button>
             </div>
         </div>
     </div>
 
-    <!-- Footer -->
-    <div class="container mx-auto px-4 py-6 text-center text-purple-200 text-sm">
-        <p>Living Portrait System • Event-Driven Architecture • Real-time AI Vision</p>
-    </div>
-
-    <script src="/static/js/app.js"></script>
+    <!-- JavaScript -->
+    <script src="/static/js/socket.js"></script>
+    <script src="/static/js/chat.js"></script>
+    <script src="/static/js/voice.js"></script>
+    <script src="/static/js/streaming.js"></script>
+    
+    <script>
+        // Initialize application
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('[App] Initializing...');
+            
+            // Create socket manager
+            const socketManager = new SocketManager();
+            socketManager.connect();
+            
+            // Create interfaces
+            window.chatInterface = new ChatInterface(socketManager);
+            window.voiceInterface = new VoiceInterface(socketManager);
+            window.streamingDisplay = new StreamingDisplay(socketManager, window.voiceInterface);
+            
+            // Connection status
+            socketManager.on('connected', () => {
+                console.log('[App] Connected to server');
+                if (window.chatInterface) {
+                    window.chatInterface.showStatus('Connected', 'success');
+                }
+            });
+            
+            socketManager.on('disconnected', () => {
+                console.log('[App] Disconnected from server');
+                if (window.chatInterface) {
+                    window.chatInterface.showStatus('Disconnected - Reconnecting...', 'warning');
+                }
+            });
+            
+            socketManager.on('error', (data) => {
+                console.error('[App] Connection error:', data);
+                if (window.chatInterface) {
+                    window.chatInterface.showStatus('Connection error', 'error');
+                }
+            });
+            
+            // Detection updates
+            socketManager.on('detection_update', (data) => {
+                document.getElementById('object-count').textContent = data.object_count;
+                document.getElementById('people-count').textContent = data.people_count;
+                
+                // Update status based on people count
+                const status = data.people_count > 0 ? 'Person Detected' : 'Active';
+                document.getElementById('detection-status').textContent = status;
+                
+                console.log('[Detection]', data.people_count, 'people,', data.object_count, 'total objects');
+            });
+            
+            // Voice detection updates
+            socketManager.on('voice_detection_update', (data) => {
+                const wakeWordStatus = document.getElementById('wake-word-status');
+                const voiceStatusText = document.getElementById('voice-status-text');
+                
+                if (data.listening) {
+                    wakeWordStatus.textContent = 'Active';
+                    wakeWordStatus.style.color = '#4CAF50';
+                } else {
+                    wakeWordStatus.textContent = 'Inactive';
+                    wakeWordStatus.style.color = '#999';
+                }
+                
+                voiceStatusText.textContent = data.status;
+                
+                if (data.triggered) {
+                    voiceStatusText.style.color = '#FFD700';
+                    setTimeout(() => {
+                        voiceStatusText.style.color = '';
+                    }, 2000);
+                }
+                
+                console.log('[Voice Detection]', data.status);
+            });
+            
+            console.log('[App] Initialization complete');
+        });
+    </script>
 </body>
 </html>
