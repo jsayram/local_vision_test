@@ -423,48 +423,51 @@ def index():
             body { 
                 font-family: Arial, sans-serif; 
                 margin: 0; 
-                padding: 20px; 
+                padding: 15px; 
                 background: #f0f0f0; 
                 height: 100vh;
                 box-sizing: border-box;
+                overflow: hidden;
             }
             .container { 
                 max-width: 100%; 
                 margin: 0 auto; 
-                height: calc(100vh - 40px);
+                height: 100%;
                 display: flex;
                 flex-direction: column;
+                overflow: hidden;
             }
             .header {
                 flex-shrink: 0;
-                margin-bottom: 20px;
+                margin-bottom: 10px;
             }
             .main-content {
                 flex: 1;
                 display: flex;
                 flex-direction: column;
-                gap: 20px;
+                gap: 10px;
                 min-height: 0;
-                overflow: auto;
+                overflow: hidden;
             }
             .top-row {
                 display: flex;
-                gap: 20px;
+                gap: 15px;
                 flex: 1;
-                min-height: 400px;
+                min-height: 0;
             }
             .bottom-row {
                 flex-shrink: 0;
+                height: 100px;
             }
             .controls { 
                 background: white; 
-                padding: 15px; 
+                padding: 10px 15px; 
                 border-radius: 8px; 
-                margin-bottom: 15px;
+                margin-bottom: 10px;
                 flex-shrink: 0;
             }
             .control-group { 
-                margin-bottom: 12px; 
+                margin-bottom: 8px; 
                 display: flex;
                 align-items: center;
                 gap: 10px;
@@ -494,11 +497,20 @@ def index():
             .btn-success { background: #28a745; color: white; }
             .btn-warning { background: #ffc107; color: #212529; }
             .btn-resume { background: #17a2b8; color: white; }
+            .left-panel {
+                flex: 0 0 280px;
+                display: flex;
+                flex-direction: column;
+                min-width: 250px;
+                max-width: 320px;
+                min-height: 0;
+            }
             .video-section {
-                flex: 2;
+                flex: 1;
                 display: flex;
                 flex-direction: column;
                 min-width: 0;
+                min-height: 0;
             }
             .video-container { 
                 background: black; 
@@ -506,7 +518,7 @@ def index():
                 position: relative;
                 border-radius: 8px;
                 overflow: hidden;
-                min-height: 500px;
+                min-height: 0;
             }
             img { 
                 width: 100%; 
@@ -515,18 +527,21 @@ def index():
                 display: block;
             }
             .right-panel {
+                flex: 0 0 280px;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                min-width: 250px;
+                max-width: 320px;
+                min-height: 0;
+            }
+            .stats-section {
                 flex: 1;
                 display: flex;
                 flex-direction: column;
-                gap: 15px;
-                min-width: 350px;
-                max-width: 450px;
-            }
-            .stats-section {
-                flex-shrink: 0;
-                display: flex;
-                flex-direction: column;
-                gap: 15px;
+                gap: 8px;
+                min-height: 0;
+                overflow: hidden;
             }
             .status-banner { 
                 background: #dc3545; 
@@ -541,11 +556,11 @@ def index():
             .detection-stats-panel {
                 background: #1a1a2e;
                 border-radius: 8px;
-                padding: 15px;
+                padding: 12px;
                 flex: 1;
-                min-height: 200px;
                 display: flex;
                 flex-direction: column;
+                overflow: hidden;
             }
             .detection-stats-header {
                 display: flex;
@@ -577,86 +592,95 @@ def index():
             }
             .detection-columns {
                 display: flex;
-                gap: 10px;
+                gap: 8px;
                 flex: 1;
+                min-height: 0;
+                overflow: hidden;
             }
             .detection-column {
                 flex: 1;
                 display: flex;
                 flex-direction: column;
                 min-width: 0;
+                min-height: 0;
             }
             .column-header {
                 font-weight: bold;
-                padding: 6px 8px;
+                padding: 5px 6px;
                 border-radius: 4px 4px 0 0;
-                font-size: 14px;
+                font-size: 12px;
                 text-align: center;
+                flex-shrink: 0;
             }
             .detection-header { background: #28a745; color: white; }
             .ai-header { background: #ffc107; color: #212529; }
             .combined-header { background: #17a2b8; color: white; }
             .column-content {
                 background: #0f0f1a;
-                padding: 10px;
+                padding: 8px;
                 border-radius: 0 0 4px 4px;
                 flex: 1;
                 overflow-y: auto;
                 font-family: 'Courier New', monospace;
-                font-size: 13px;
+                font-size: 11px;
                 color: #fff;
                 user-select: text;
                 cursor: text;
-                line-height: 1.6;
+                line-height: 1.5;
+                min-height: 0;
             }
             .descriptions-section {
                 background: white;
-                padding: 15px;
+                padding: 10px 15px;
                 border-radius: 8px;
                 display: flex;
                 flex-direction: column;
                 width: 100%;
                 box-sizing: border-box;
+                height: 100%;
+                overflow: hidden;
             }
             .descriptions-header {
                 font-weight: bold;
-                margin-bottom: 10px;
+                margin-bottom: 8px;
                 color: #333;
                 border-bottom: 2px solid #007bff;
                 padding-bottom: 5px;
+                flex-shrink: 0;
             }
             .ai-description {
                 background: #f8f9fa;
-                padding: 12px;
+                padding: 10px;
                 border-radius: 6px;
                 border-left: 4px solid #007bff;
                 font-family: Arial, sans-serif;
-                font-size: 14px;
-                line-height: 1.6;
+                font-size: 13px;
+                line-height: 1.5;
                 color: #333;
-                max-height: 120px;
+                flex: 1;
                 overflow-y: auto;
                 white-space: normal;
                 word-wrap: break-word;
             }
             .system-stats {
                 background: white;
-                padding: 15px;
+                padding: 10px;
                 border-radius: 8px;
                 flex-shrink: 0;
             }
             .system-stats-header {
                 font-weight: bold;
-                margin-bottom: 10px;
+                margin-bottom: 8px;
                 color: #333;
                 border-bottom: 2px solid #28a745;
-                padding-bottom: 5px;
+                padding-bottom: 4px;
+                font-size: 14px;
             }
             .stats-row {
                 display: flex;
-                gap: 15px;
+                gap: 10px;
                 font-family: 'Courier New', monospace;
-                font-size: 13px;
+                font-size: 12px;
             }
             .stat-item {
                 background: #f8f9fa;
@@ -670,23 +694,24 @@ def index():
                 font-weight: bold;
                 color: #495057;
                 display: block;
-                margin-bottom: 4px;
+                margin-bottom: 2px;
+                font-size: 11px;
             }
             .stat-value {
                 color: #007bff;
                 font-weight: bold;
-                font-size: 16px;
+                font-size: 14px;
             }
             .performance-stats {
                 background: white;
-                padding: 12px;
+                padding: 8px 10px;
                 border-radius: 8px;
                 font-family: 'Courier New', monospace;
-                font-size: 12px;
+                font-size: 11px;
                 flex-shrink: 0;
             }
             .performance-stats div {
-                margin-bottom: 4px;
+                margin-bottom: 2px;
             }
             .overlay-toggle {
                 background: #007bff;
@@ -705,18 +730,48 @@ def index():
             }
             @media (max-width: 1400px) {
                 .top-row {
-                    flex-direction: column;
+                    flex-wrap: wrap;
                 }
-                .right-panel {
-                    width: 100%;
+                .left-panel {
+                    flex: 1 1 100%;
                     max-width: none;
-                    min-width: 0;
+                    max-height: 350px;
+                    order: 2;
                 }
                 .video-section {
-                    min-height: 400px;
-                }
-                .video-container {
+                    flex: 1 1 60%;
                     min-height: 350px;
+                    order: 1;
+                }
+                .right-panel {
+                    flex: 1 1 35%;
+                    max-width: none;
+                    min-width: 250px;
+                    order: 1;
+                }
+                .detection-columns {
+                    flex-direction: row;
+                }
+            }
+            @media (max-width: 900px) {
+                .top-row {
+                    flex-direction: column;
+                }
+                .left-panel, .video-section, .right-panel {
+                    flex: 1 1 auto;
+                    max-width: none;
+                    width: 100%;
+                }
+                .video-section {
+                    order: 1;
+                    min-height: 300px;
+                }
+                .right-panel {
+                    order: 2;
+                }
+                .left-panel {
+                    order: 3;
+                    max-height: 400px;
                 }
             }
             @media (max-width: 768px) {
@@ -737,7 +792,10 @@ def index():
                     flex-direction: column;
                 }
                 .detection-column {
-                    min-height: 100px;
+                    min-height: 80px;
+                }
+                .column-content {
+                    max-height: 100px;
                 }
             }
         </style>
@@ -809,6 +867,35 @@ def index():
             
             <div class="main-content">
                 <div class="top-row">
+                    <div class="left-panel">
+                        <div class="detection-stats-panel">
+                            <div class="detection-stats-header">
+                                <span>📊 Detection Results</span>
+                                <button onclick="copyDetectionData()" style="padding: 4px 8px; font-size: 11px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">📋 Copy All</button>
+                            </div>
+                            <div class="detection-counts" id="detectionCounts">
+                                <span class="count-item"><strong>Detection:</strong> <span id="detectionCount">0</span></span>
+                                <span class="count-item"><strong>AI:</strong> <span id="aiCount">0</span></span>
+                                <span class="count-item"><strong>Combined:</strong> <span id="combinedCount">0</span></span>
+                                <span class="count-item"><strong>Avg Conf:</strong> <span id="avgConfidence">--</span></span>
+                            </div>
+                            <div class="detection-columns" id="detectionColumns">
+                                <div class="detection-column">
+                                    <div class="column-header detection-header">DETECTION</div>
+                                    <div class="column-content" id="detectionList">Loading...</div>
+                                </div>
+                                <div class="detection-column">
+                                    <div class="column-header ai-header">AI</div>
+                                    <div class="column-content" id="aiList">Loading...</div>
+                                </div>
+                                <div class="detection-column">
+                                    <div class="column-header combined-header">DETECTION+AI</div>
+                                    <div class="column-content" id="combinedList">Loading...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
                     <div class="video-section">
                         <div class="video-container">
                             <img src="/video_feed" alt="Live Video Feed">
@@ -844,33 +931,6 @@ def index():
                                 <div>Processing Time: --</div>
                                 <div>Frame Size: --</div>
                                 <div>Status: Initializing...</div>
-                            </div>
-                        </div>
-                        
-                        <div class="detection-stats-panel">
-                            <div class="detection-stats-header">
-                                <span>📊 Detection Results</span>
-                                <button onclick="copyDetectionData()" style="padding: 4px 8px; font-size: 11px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">📋 Copy All</button>
-                            </div>
-                            <div class="detection-counts" id="detectionCounts">
-                                <span class="count-item"><strong>Detection:</strong> <span id="detectionCount">0</span></span>
-                                <span class="count-item"><strong>AI:</strong> <span id="aiCount">0</span></span>
-                                <span class="count-item"><strong>Combined:</strong> <span id="combinedCount">0</span></span>
-                                <span class="count-item"><strong>Avg Conf:</strong> <span id="avgConfidence">--</span></span>
-                            </div>
-                            <div class="detection-columns" id="detectionColumns">
-                                <div class="detection-column">
-                                    <div class="column-header detection-header">DETECTION</div>
-                                    <div class="column-content" id="detectionList">Loading...</div>
-                                </div>
-                                <div class="detection-column">
-                                    <div class="column-header ai-header">AI</div>
-                                    <div class="column-content" id="aiList">Loading...</div>
-                                </div>
-                                <div class="detection-column">
-                                    <div class="column-header combined-header">DETECTION+AI</div>
-                                    <div class="column-content" id="combinedList">Loading...</div>
-                                </div>
                             </div>
                         </div>
                     </div>
