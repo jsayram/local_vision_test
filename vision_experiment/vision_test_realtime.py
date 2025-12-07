@@ -48,7 +48,7 @@ paused = False  # Pause/Resume control
 
 # Detection control (separate model and mode)
 detection_model = "yolov8"  # Options: "yolov8", "tensorflow", "opencv"
-detection_mode = "all_detection"  # Options: "all_detection", "face_features", "people", "general_objects", "none"
+detection_mode = "all_detection"  # Options: "all_detection", "face_features", "face_expressions", "body_parts", "people", "general_objects", "none"
 
 # Processing FPS control
 processing_fps = "1 FPS"  # Options: "1 FPS", "15 FPS", "1 FP 2 seconds", "1 FP 5 seconds", etc. or custom
@@ -531,7 +531,8 @@ def generate_frames():
             if not server_running:  # Check before sleep
                 break
 
-            time.sleep(0.033)  # ~30fps max for smooth video
+                # Sleep for the selected interval (UI-controlled processing rate)
+                time.sleep(interval)
 
     except GeneratorExit:
         # Normal generator cleanup when client disconnects - don't release camera
