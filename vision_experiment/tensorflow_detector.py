@@ -3,31 +3,48 @@ import time
 import os
 
 # TensorFlow import is deferred to avoid startup issues
-TF_AVAILABLE = False
+TF_AVAILABLE = None  # None means not checked yet, True/False after check
 _tf_module = None
 _hub_module = None
 
 class TensorFlowDetector:
     def __init__(self):
         self.detector = None
-        self.initialize_detector()
+        self._initialized = False
+        # Don't initialize on construction - do it lazily on first detect()
+        print("TensorFlowDetector created (lazy initialization)")
+
+    def _check_tensorflow_available(self):
+        """Check if TensorFlow is available"""
+        global TF_AVAILABLE, _tf_module, _hub_module
+        
+        if TF_AVAILABLE is not None:
+            return TF_AVAILABLE
+            
+        try:
+            import tensorflow
+            import tensorflow_hub
+            _tf_module = tensorflow
+            _hub_module = tensorflow_hub
+            TF_AVAILABLE = True
+            print(f"✓ TensorFlow {tensorflow.__version__} available")
+            return True
+        except ImportError as e:
+            TF_AVAILABLE = False
+            print(f"✗ TensorFlow not installed: {e}")
+            return False
 
     def initialize_detector(self):
         """Lazy load TensorFlow detector"""
-        global TF_AVAILABLE, _tf_module, _hub_module
-        if self.detector is not None:
+        global _hub_module
+        
+        if self._initialized:
             return self.detector
-
-        if not TF_AVAILABLE:
-            try:
-                import tensorflow
-                import tensorflow_hub
-                _tf_module = tensorflow
-                _hub_module = tensorflow_hub
-                TF_AVAILABLE = True
-            except ImportError:
-                print("✗ TensorFlow import failed")
-                return None
+            
+        self._initialized = True
+        
+        if not self._check_tensorflow_available():
+            return None
 
         try:
             hardware_info = self.detect_hardware()
@@ -37,12 +54,17 @@ class TensorFlowDetector:
             else:
                 model_url = "https://tfhub.dev/tensorflow/ssd_mobilenet_v2/fpnlite_320x320/1"
 
+            print(f"Loading TensorFlow model from {model_url}...")
             self.detector = _hub_module.load(model_url)
             print("✓ TensorFlow Object Detection loaded")
             return self.detector
         except Exception as e:
             print(f"✗ TensorFlow OD failed: {e}")
             return None
+
+    def is_available(self):
+        """Check if TensorFlow detector is available and can be used"""
+        return self._check_tensorflow_available()
 
     def detect_hardware(self):
         """Detect hardware capabilities"""
@@ -67,10 +89,12 @@ class TensorFlowDetector:
         Detect objects using TensorFlow
         Returns: list of detections with format [{'bbox': (x1,y1,x2,y2), 'label': str, 'confidence': float}, ...]
         """
-        if not self.detector:
+        # Lazy initialization on first detect call
+        if not self._initialized:
             self.initialize_detector()
-            if not self.detector:
-                return []
+            
+        if not self.detector:
+            return []
 
         try:
             global _tf_module

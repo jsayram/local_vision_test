@@ -32,8 +32,11 @@ class DetectionManager:
 
         if model == "yolov8" and self.yolo_detector and self.yolo_detector.detector:
             detections = self.yolo_detector.detect(frame, mode)
-        elif model == "tensorflow" and self.tf_detector:
-            detections = self.tf_detector.detect(frame, mode)
+        elif model == "tensorflow":
+            if self.tf_detector and self.tf_detector.is_available():
+                detections = self.tf_detector.detect(frame, mode)
+            else:
+                print("⚠ TensorFlow not available - install with: pip install tensorflow tensorflow-hub")
         elif model == "opencv" and self.opencv_detector:
             detections = self.opencv_detector.detect(frame, mode)
 
