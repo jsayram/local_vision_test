@@ -471,9 +471,8 @@ def generate_frames():
             # Use cached detections for display
             detections = cached_detections_global if show_overlay else []
 
-            # Draw detections on frame (using cached results)
-            if show_overlay and detections:
-                detection_manager.draw_detections(frame, detections)
+            # Note: drawing of detection boxes is deferred until we compute
+            # correlated_results so we only display boxes for confirmed matches.
 
             frame_height, frame_width = frame.shape[:2]
 
@@ -489,6 +488,14 @@ def generate_frames():
 
             # Get correlated results - only confirmed matches where AI and detection agree
             correlated_results = correlate_ai_detection(current_description, detections) if (detections and current_description) else []
+
+            # Draw only the detection boxes for correlated (AI+Detection confirmed) results
+            if show_overlay and correlated_results:
+                # Build set of confirmed canonical labels (lowercase)
+                confirmed_labels = set([name.lower() for name, _, _ in correlated_results])
+                detections_to_draw = [d for d in detections if d.get('label','').lower() in confirmed_labels]
+                if detections_to_draw:
+                    detection_manager.draw_detections(frame, detections_to_draw)
 
             # Store data for web UI endpoint (always available, even when overlay is off)
             get_terminal_data.detection_objects = detection_objects
