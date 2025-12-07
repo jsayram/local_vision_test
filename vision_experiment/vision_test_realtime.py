@@ -44,6 +44,70 @@ detection_mode = "all_detection"  # Options: "all_detection", "face_features", "
 # Processing FPS control
 processing_fps = "1 FPS"  # Options: "1 FPS", "15 FPS", "1 FP 2 seconds", "1 FP 5 seconds", etc. or custom
 
+def correlate_ai_detection(ai_description, detections):
+    """
+    Correlate AI description with detection results to create combined confidence scores
+    Returns: list of tuples (object_name, combined_confidence, source)
+    """
+    import re
+    from difflib import SequenceMatcher
+    
+    # Extract keywords from AI description
+    keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant', 
+                'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door', 
+                'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse', 
+                'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch', 
+                'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot', 'potted plant']
+    
+    # Find AI-identified objects
+    ai_objects = []
+    description_lower = ai_description.lower()
+    for keyword in keywords:
+        if keyword.lower() in description_lower:
+            ai_objects.append(keyword.title())
+    
+    # Remove duplicates and clean
+    ai_objects = list(set(ai_objects))
+    
+    # Create correlation results
+    correlated_results = []
+    
+    # Process detected objects
+    for det in detections:
+        obj_name = det['label'].lower()
+        det_conf = det['confidence']
+        
+        # Find best AI match using fuzzy matching
+        best_match = None
+        best_ratio = 0
+        
+        for ai_obj in ai_objects:
+            ai_obj_lower = ai_obj.lower()
+            ratio = SequenceMatcher(None, obj_name, ai_obj_lower).ratio()
+            if ratio > best_ratio and ratio > 0.6:  # 60% similarity threshold
+                best_match = ai_obj
+                best_ratio = ratio
+        
+        if best_match:
+            # Both AI and detection agree - high confidence
+            combined_conf = max(det_conf, 0.85)  # Boost to at least 0.85
+            correlated_results.append((det['label'].title(), combined_conf, "AI + Detection"))
+            # Remove from AI objects to avoid double counting
+            ai_objects.remove(best_match)
+        else:
+            # Only detection found it - slight penalty
+            combined_conf = det_conf * 0.9
+            correlated_results.append((det['label'].title(), combined_conf, "Detection Only"))
+    
+    # Add remaining AI-only objects
+    for ai_obj in ai_objects:
+        correlated_results.append((ai_obj, 0.6, "AI Only"))
+    
+    # Sort by confidence (highest first)
+    correlated_results.sort(key=lambda x: x[1], reverse=True)
+    
+    return correlated_results
+
 def parse_fps_string(fps_string):
     """Parse FPS string and return interval in seconds"""
     fps_string = fps_string.lower().strip()
@@ -260,33 +324,69 @@ def generate_frames():
         cv2.rectangle(frame, (0, frame_height - terminal_height), (frame_width, frame_height), (0, 0, 0), -1)
         cv2.rectangle(frame, (0, frame_height - terminal_height), (frame_width, frame_height), (255, 255, 255), 2)
 
-        # Display detected objects in terminal
-        y_pos = frame_height - terminal_height + 30
-        if detected_objects:
-            unique_objects = list(set(detected_objects))  # Remove duplicates
-            cv2.putText(frame, 'Detected Objects:', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            y_pos += 25
-            for obj in unique_objects[:8]:  # Limit to 8 items to fit in terminal
-                cv2.putText(frame, f'- {obj}', (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-                y_pos += 20
-        else:
-            cv2.putText(frame, 'No objects detected', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-        
-        # Overlay AI description if enabled (but simplified)
+        # Display three-column view: Detection | AI | Detection+AI
+        y_pos = frame_height - terminal_height + 25
+
+        # Get detection objects
+        detection_objects = [f"{det['label'].title()} ({det['confidence']:.2f})" for det in detections]
+
+        # Get AI objects
+        ai_objects = []
         if show_overlay and current_description:
-            # Parse description for key objects (simple keyword extraction)
-            keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant', 'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door', 'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse', 'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch', 'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot']
-            found_objects = [word for word in keywords if word.lower() in current_description.lower()]
-            if found_objects:
-                y_pos += 20
-                cv2.putText(frame, 'AI Identified:', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-                y_pos += 25
-                for obj in list(set(found_objects))[:5]:  # Limit to 5
-                    cv2.putText(frame, f'- {obj.title()}', (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-                    y_pos += 20
+            keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant',
+                       'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door',
+                       'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse',
+                       'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch',
+                       'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot', 'potted plant']
+            description_lower = current_description.lower()
+            ai_objects = [word.title() for word in keywords if word.lower() in description_lower]
+            ai_objects = list(set(ai_objects))  # Remove duplicates
+
+        # Get correlated results
+        correlated_results = correlate_ai_detection(current_description, detections) if (detections or ai_objects) else []
+
+        # Column headers
+        col_width = frame_width // 3
+        cv2.putText(frame, 'Detection', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(frame, 'AI', (col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        cv2.putText(frame, 'Detection+AI', (2 * col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+        # Draw column separators
+        cv2.line(frame, (col_width, frame_height - terminal_height), (col_width, frame_height), (255, 255, 255), 1)
+        cv2.line(frame, (2 * col_width, frame_height - terminal_height), (2 * col_width, frame_height), (255, 255, 255), 1)
+
+        y_pos += 20
+
+        # Display items in each column (max 6 per column)
+        max_items = 6
+        for i in range(max_items):
+            # Detection column
+            if i < len(detection_objects):
+                cv2.putText(frame, f'- {detection_objects[i]}', (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+
+            # AI column
+            if i < len(ai_objects):
+                cv2.putText(frame, f'- {ai_objects[i]}', (col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+
+            # Detection+AI column
+            if i < len(correlated_results):
+                obj_name, conf, source = correlated_results[i]
+                # Color code by source
+                if source == "AI + Detection":
+                    color = (0, 255, 0)  # Green for both
+                elif source == "Detection Only":
+                    color = (255, 255, 0)  # Yellow for detection only
+                else:  # AI Only
+                    color = (255, 165, 0)  # Orange for AI only
+
+                cv2.putText(frame, f'- {obj_name} ({conf:.2f})', (2 * col_width + 10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+
+            y_pos += 15
         
-        # Store detected objects for terminal data endpoint
-        get_terminal_data.last_detected_objects = list(set(detected_objects)) if detected_objects else []
+        # Store data for terminal endpoint
+        get_terminal_data.detection_objects = detection_objects
+        get_terminal_data.ai_objects = ai_objects
+        get_terminal_data.correlated_objects = [f"{obj} ({conf:.2f}) [{source}]" for obj, conf, source in correlated_results]
         
         # Encode frame for streaming
         ret, buffer = cv2.imencode('.jpg', frame)
@@ -772,40 +872,27 @@ def get_status():
 @app.route('/get_terminal_data')
 def get_terminal_data():
     # Initialize if not exists
-    if not hasattr(get_terminal_data, 'last_detected_objects'):
-        get_terminal_data.last_detected_objects = []
-    
-    global current_description
-    
-    # Get detected objects from the last frame processing
-    # This will be updated by the generate_frames function
-    detected_objects_text = "Detected Objects:\n"
-    if hasattr(get_terminal_data, 'last_detected_objects') and get_terminal_data.last_detected_objects:
-        for obj in get_terminal_data.last_detected_objects[:10]:  # Limit to 10 items
-            detected_objects_text += f"- {obj}\n"
-    else:
-        detected_objects_text += "- No objects detected\n"
-    
-    ai_text = "AI Identified:\n"
-    if current_description:
-        # Extract key objects from AI description
-        keywords = ['man', 'woman', 'person', 'couch', 'chair', 'table', 'lamp', 'vase', 'flowers', 'plant', 
-                   'window', 'wall', 'shirt', 'sweater', 'headphones', 'bed', 'pillow', 'curtains', 'door', 
-                   'ceiling', 'floor', 'carpet', 'book', 'phone', 'computer', 'screen', 'keyboard', 'mouse', 
-                   'bottle', 'glass', 'cup', 'plate', 'food', 'fruit', 'vegetable', 'hat', 'glasses', 'watch', 
-                   'bag', 'shoes', 'jacket', 'pants', 'dress', 'hair', 'hand', 'arm', 'leg', 'foot']
-        
-        found_objects = [word for word in keywords if word.lower() in current_description.lower()]
-        if found_objects:
-            unique_objects = list(set(found_objects))[:8]  # Limit to 8 unique items
-            for obj in unique_objects:
-                ai_text += f"- {obj.title()}\n"
-        else:
-            ai_text += "- Processing scene...\n"
-    else:
-        ai_text += "- Initializing AI...\n"
-    
-    return {'terminal': detected_objects_text + "\n" + ai_text}
+    if not hasattr(get_terminal_data, 'detection_objects'):
+        get_terminal_data.detection_objects = []
+    if not hasattr(get_terminal_data, 'ai_objects'):
+        get_terminal_data.ai_objects = []
+    if not hasattr(get_terminal_data, 'correlated_objects'):
+        get_terminal_data.correlated_objects = []
+
+    # Create three-column display
+    max_items = 8
+    lines = ["Detection".ljust(20) + "AI".ljust(15) + "Detection+AI"]
+
+    for i in range(max_items):
+        detection = get_terminal_data.detection_objects[i] if i < len(get_terminal_data.detection_objects) else ""
+        ai = get_terminal_data.ai_objects[i] if i < len(get_terminal_data.ai_objects) else ""
+        correlated = get_terminal_data.correlated_objects[i] if i < len(get_terminal_data.correlated_objects) else ""
+
+        line = f"{detection[:18]:<20}{ai[:13]:<15}{correlated[:25]}"
+        lines.append(line)
+
+    terminal_text = "\n".join(lines)
+    return {'terminal': terminal_text}
 
 @app.route('/stop_server')
 def stop_server():
