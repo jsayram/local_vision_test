@@ -170,3 +170,4 @@ vosk-model*/
 .pytest_cache/
 *.pyc
 vision_experiment/core/memory/
+memory/conversations.json
