@@ -67,8 +67,22 @@ class VoiceManager:
             if self.settings.tts_voice:
                 self.tts_engine.setProperty('voice', self.settings.tts_voice)
             
+            # Increase rate slightly to reduce pauses
             self.tts_engine.setProperty('rate', self.settings.tts_rate)
             self.tts_engine.setProperty('volume', self.settings.tts_volume)
+            
+            # Try to reduce punctuation pauses (platform-specific)
+            try:
+                # Some TTS engines support this
+                voices = self.tts_engine.getProperty('voices')
+                # Use a voice that speaks more naturally/quickly if available
+                for voice in voices:
+                    if 'enhanced' in voice.name.lower() or 'premium' in voice.name.lower():
+                        self.tts_engine.setProperty('voice', voice.id)
+                        print(f"[Voice] Using enhanced voice: {voice.name}")
+                        break
+            except:
+                pass
             
             # Get available voices for info
             voices = self.tts_engine.getProperty('voices')
@@ -96,11 +110,34 @@ class VoiceManager:
             print(f"[Voice] TTS unavailable - would say: {text}")
             return
         
+        # Pre-process text to reduce pauses
+        processed_text = self._preprocess_for_speech(text)
+        
         if use_buffer and self.settings.punctuation_buffer:
-            self._add_to_buffer(text)
+            self._add_to_buffer(processed_text)
         else:
             # Speak immediately
-            self.tts_queue.put(text)
+            self.tts_queue.put(processed_text)
+    
+    def _preprocess_for_speech(self, text: str) -> str:
+        """
+        Pre-process text to make speech flow more naturally
+        Reduces excessive pausing at punctuation
+        """
+        # Replace multiple punctuation with single
+        text = re.sub(r'\.{2,}', '.', text)  # ... -> .
+        text = re.sub(r'!{2,}', '!', text)   # !!! -> !
+        text = re.sub(r'\?{2,}', '?', text)  # ??? -> ?
+        
+        # Replace some punctuation combos that cause long pauses
+        text = re.sub(r'\.\.\.', ',', text)  # ellipsis -> comma (shorter pause)
+        text = re.sub(r';', ',', text)        # semicolon -> comma
+        text = re.sub(r':', ',', text)        # colon -> comma
+        
+        # Remove excessive spaces
+        text = re.sub(r'\s+', ' ', text)
+        
+        return text.strip()
     
     def _add_to_buffer(self, text: str):
         """
