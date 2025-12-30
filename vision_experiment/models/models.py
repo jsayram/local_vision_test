@@ -474,10 +474,49 @@ class PersonConversation:
     
     def _archive_old_messages(self):
         """Move old messages to archive, keeping only recent ones"""
+        from core import config
+        import json
+        import os
+        from pathlib import Path
+        
         # Keep most recent max_messages
         archived = self.messages[:-self.max_messages]
         self.messages = self.messages[-self.max_messages:]
-        # TODO: Save archived messages to separate file
+        
+        # Save archived messages to separate file
+        if archived:
+            try:
+                # Ensure memory directory exists
+                Path(config.MEMORY_DIR).mkdir(parents=True, exist_ok=True)
+                
+                # Load existing archive or create new
+                archive_data = []
+                if os.path.exists(config.ARCHIVED_CONVERSATIONS_JSON):
+                    try:
+                        with open(config.ARCHIVED_CONVERSATIONS_JSON, 'r') as f:
+                            archive_data = json.load(f)
+                    except json.JSONDecodeError:
+                        archive_data = []
+                
+                # Add new archived messages with metadata
+                archive_entry = {
+                    'person_id': self.person_id,
+                    'archived_at': datetime.now().isoformat(),
+                    'message_count': len(archived),
+                    'messages': [msg.to_dict() for msg in archived]
+                }
+                archive_data.append(archive_entry)
+                
+                # Save updated archive
+                with open(config.ARCHIVED_CONVERSATIONS_JSON, 'w') as f:
+                    json.dump(archive_data, f, indent=2)
+                    
+                if config.DEBUG_MODE:
+                    print(f"✓ Archived {len(archived)} messages for person {self.person_id}")
+                    
+            except Exception as e:
+                print(f"✗ Error archiving messages: {e}")
+        
         return archived
     
     def get_recent_messages(self, count: int = 10) -> List[ChatMessage]:

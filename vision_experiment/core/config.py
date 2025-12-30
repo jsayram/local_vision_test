@@ -146,6 +146,7 @@ MEMORY_DIR = os.path.join(os.path.dirname(__file__), 'memory')
 PEOPLE_JSON = os.path.join(MEMORY_DIR, 'people.json')
 INTERACTIONS_JSON = os.path.join(MEMORY_DIR, 'interactions.json')
 SETTINGS_JSON = os.path.join(MEMORY_DIR, 'settings.json')
+ARCHIVED_CONVERSATIONS_JSON = os.path.join(MEMORY_DIR, 'archived_conversations.json')
 
 # Number of recent interactions to include in Moondream context
 MAX_RECENT_INTERACTIONS = 3
