@@ -124,7 +124,7 @@ pip install pyaudio
 
 **If still failing:**
 ```bash
-CFLAGS="-I/opt/homebrew/include" LDFLAGS="-L/opt/homebrew/lib" pip install pyaudio
+CFLAGS="-I$(brew --prefix)/include" LDFLAGS="-L$(brew --prefix)/lib" pip install pyaudio
 ```
 
 ### Vosk Not Recognizing Speech

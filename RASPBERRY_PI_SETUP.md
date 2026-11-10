@@ -124,7 +124,7 @@ ollama run llama3.2:1b
 # Test it responds, then /bye
 
 # 3. Start the Living Portrait
-cd /Users/jramirez/Git/local_vision_test
+cd <project-root>
 ./start_server.sh
 
 # 4. Open browser on same network

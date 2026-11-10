@@ -104,7 +104,7 @@ pyaudio>=0.2.13
 
 ### Start the Server
 ```bash
-cd /Users/jramirez/Git/local_vision_test
+cd <project-root>
 source .venv/bin/activate
 cd vision_experiment
 python app.py
